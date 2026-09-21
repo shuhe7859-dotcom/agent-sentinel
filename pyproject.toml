@@ -1,0 +1,118 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-sentinel"
+version = "0.1.0"
+description = "Guardrails and flight recorder for coding agents."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "MI-Manchi" }]
+keywords = [
+  "ai-agents",
+  "audit-log",
+  "guardrails",
+  "llm",
+  "policy",
+  "security",
+]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Security",
+  "Topic :: Software Development :: Quality Assurance",
+]
+# The runtime core intentionally depends on the standard library only.
+# Policy documents use TOML so that no parser has to be vendored.
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.9",
+  "mypy>=1.15",
+  "pre-commit>=4.0",
+  "build>=1.2",
+]
+
+[project.scripts]
+sentinel = "agent_sentinel.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/shuhe7859-dotcom/agent-sentinel"
+Repository = "https://github.com/shuhe7859-dotcom/agent-sentinel"
+Issues = "https://github.com/shuhe7859-dotcom/agent-sentinel/issues"
+Changelog = "https://github.com/shuhe7859-dotcom/agent-sentinel/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_sentinel"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["agent_sentinel"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 85
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "if __name__ == .__main__.:",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "examples"]
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = [
+  "B",   # flake8-bugbear
+  "C4",  # flake8-comprehensions
+  "E",   # pycodestyle errors
+  "F",   # pyflakes
+  "I",   # isort
+  "N",   # pep8-naming
+  "RET", # flake8-return
+  "RUF", # ruff-specific rules
+  "S",   # flake8-bandit
+  "SIM", # flake8-simplify
+  "UP",  # pyupgrade
+  "W",   # pycodestyle warnings
+]
+ignore = [
+  "E501", # line length is enforced by the formatter
+  "S101", # asserts are the point of a test suite
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agent_sentinel"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
+files = ["src"]
+show_error_codes = true

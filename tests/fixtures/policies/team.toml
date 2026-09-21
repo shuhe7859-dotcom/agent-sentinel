@@ -1,0 +1,32 @@
+# A worked example of a hand-written policy, used by the test suite.
+schema      = 1
+name        = "team"
+description = "A narrow policy for a repository that must not publish by itself."
+default     = "review"
+
+[[rules]]
+id       = "shell.tests"
+kind     = "shell"
+effect   = "allow"
+priority = 10
+pattern  = '''(?i)\b(?:pytest|ruff|mypy|python -m pytest)\b'''
+reason   = "running the local test and lint tooling is always fine"
+tags     = ["quality"]
+
+[[rules]]
+id       = "shell.read-only-git"
+kind     = "shell"
+effect   = "allow"
+priority = 20
+pattern  = '''(?i)\bgit\s+(?:status|log|diff|show|branch)\b'''
+reason   = "read-only git commands change nothing"
+tags     = ["git"]
+
+[[rules]]
+id       = "shell.publish"
+kind     = "shell"
+effect   = "deny"
+priority = 5
+pattern  = '''(?i)\b(?:git\s+push|npm\s+publish|twine\s+upload)\b'''
+reason   = "publishing is a human decision in this repository"
+tags     = ["release"]
