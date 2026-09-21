@@ -1,0 +1,116 @@
+# Threat model
+
+A guardrail that overstates itself is worse than no guardrail, because people
+stop paying attention. This document says plainly what agent-sentinel defends
+against, what it does not, and what has to be true for it to work at all.
+
+## What is being protected
+
+| Asset | Why it matters |
+| --- | --- |
+| The working tree | Uncommitted work is often the only copy. |
+| The host machine | A coding agent usually has the user's full privileges. |
+| Credentials | `.env`, SSH keys, cloud tokens, browser profiles. |
+| Remote history | A force push to a shared branch destroys other people's work. |
+| The audit trail | If the log can be edited, accountability disappears. |
+
+## Who or what we are defending against
+
+**A confident, wrong agent.** The realistic failure mode is not malice. It is an
+agent that decides `git reset --hard` is the cleanest way out of a merge
+conflict, or that piping a setup script into `sh` is the fastest way to install
+a tool. Most of the shipped rules target this case.
+
+**A prompt-injected agent.** An agent that reads a repository, an issue or a web
+page it does not control may be steered by text inside that content. Here the
+agent may be actively working against the user's interest, within the
+permissions it was given.
+
+**An after-the-fact question.** Weeks later: did the agent touch the deployment
+configuration, and did anyone approve it? The flight recorder is aimed squarely
+at this, and it is the part of the project that has to be right.
+
+## In scope
+
+* Refusing a proposed action that matches a `deny` rule.
+* Stopping at `review` until a human or a configured reviewer callback approves.
+* Recording the proposal, the verdict and the observed outcome of every guarded
+  action.
+* Detecting that a journal was edited, truncated, reordered or spliced after the
+  fact.
+* Being readable and reviewable: a policy is a diffable file, the log is text.
+
+## Out of scope
+
+* **Isolation.** agent-sentinel is not a sandbox, a container, a VM or a seccomp
+  filter. It does not confine a process; it decides whether to start one.
+  Containers, `firejail`, AppArmor and dedicated users do that job, and they
+  compose with this project rather than competing with it.
+* **Kernel-level enforcement.** A process that is already running is not
+  constrained by anything here.
+* **Prevention of tampering.** The journal *detects* tampering; it does not
+  prevent it. An attacker who can rewrite the whole file can produce a
+  consistent chain from scratch. Detecting that requires the head hash to be
+  anchored somewhere else — see the roadmap.
+* **Malware analysis, dependency scanning, secret scanning at rest.** Different
+  tools, different problems.
+* **Judging intent.** Patterns match text. `echo "rm -rf /"` and `rm -rf /` look
+  the same to a regex.
+
+## The load-bearing assumption
+
+> agent-sentinel is only as strong as the claim that the agent cannot run
+> commands except through it.
+
+A coding agent with an unrestricted shell can simply execute `rm -rf /`
+directly. If the guardrail is invoked from inside the same trust domain as the
+thing it is guarding, it is a bump, not a wall. The honest framing is
+**defense in depth**:
+
+```
+OS sandbox / container / unprivileged user     ← the actual boundary
+    └── agent-sentinel policy                  ← bounds intent, explains refusals
+            └── agent-sentinel journal         ← evidence of what was attempted
+```
+
+The strongest deployments put the guardrail on the only path to execution: a
+CI runner, a wrapper around the agent's tool-calling layer, or an MCP server
+that owns the tools. In those placements the assumption holds and the guardrail
+does real work.
+
+## Threats and the current answer
+
+| Threat | Current answer | Residual risk |
+| --- | --- | --- |
+| Destructive command (`rm -rf /`, `mkfs`, `dd` to `/dev/`) | `deny` rules in every preset | A novel spelling the pattern misses |
+| Remote code execution by convention (`curl … \| sh`) | `deny` rule | Obfuscated equivalents |
+| Path escape via `..` | `deny` for `file.write` / `file.delete` | No filesystem guard exists yet, so nothing produces those actions in practice |
+| Editing `.git` internals | `deny` rule | Same caveat as above |
+| Force push / history rewrite | `review` | A human who rubber-stamps |
+| Credential access or exfiltration | `review` rules plus a default `review` for network actions | No network guard exists yet, so nothing produces `network` actions in practice |
+| Silently editing a journal record | Per-record digest | Attacker who rewrites the entire file |
+| Truncating a journal | `sequence` and `link` checks | Truncating the *tail* is indistinguishable from a shorter session unless the head hash was anchored |
+| Denial of service by a runaway command | `--timeout` kills the process and records `timeout` | Resource limits are the operating system's job |
+
+Two entries above are worth repeating: **tail truncation is not currently
+detectable**, and **a full rewrite is not detectable**. Both are fixed by
+publishing the head hash outside the journal — to a CI log, a transparency log,
+or a teammate. That work is milestone M3 in [`roadmap.md`](roadmap.md).
+
+## Failure behaviour
+
+The design preference is to fail loudly and conservatively:
+
+* A policy that cannot be parsed is an error, never a silent fallback to
+  "allow everything".
+* An unknown `schema`, `effect` or `kind` is an error, not a guess.
+* An unreadable journal record raises instead of being skipped, so a damaged log
+  cannot look like a clean one.
+* `deny` and `review` both record the proposal before refusing, so a refused
+  action leaves evidence.
+
+## Reporting a vulnerability
+
+See [`SECURITY.md`](../SECURITY.md). Please do not open a public issue for a
+bypass.
+
