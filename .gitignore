@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# agent-sentinel flight recorder output
+.sentinel/
+*.sentinel.jsonl
+
+# OS cruft
+.DS_Store
+Thumbs.db

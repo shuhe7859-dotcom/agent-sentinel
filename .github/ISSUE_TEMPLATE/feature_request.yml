@@ -1,0 +1,52 @@
+name: Feature request
+description: Propose a new guard, adapter, policy capability or command.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before opening this, it is worth a look at
+        [docs/roadmap.md](../blob/main/docs/roadmap.md) — the idea may already
+        be planned. Changes to the core vocabulary (action kinds, effects)
+        usually need a design discussion first.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What is hard or impossible today? Describe the situation, not the solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: What you would like to see. A policy snippet or a sketch of the API is welcome.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Including "do nothing" — what happens if this is not built?
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Which part of the project?
+      multiple: true
+      options:
+        - Policies and presets
+        - Journal and record format
+        - Guards (filesystem, network)
+        - CLI
+        - Adapters and integrations
+        - Documentation
+    validations:
+      required: true
+

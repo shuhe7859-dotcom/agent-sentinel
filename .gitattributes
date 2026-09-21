@@ -1,0 +1,22 @@
+# Normalise line endings in the repository.
+#
+# This machine (like most Windows setups) has core.autocrlf=true, while ruff is
+# configured for LF and the test fixtures contain byte-exact expectations. Left
+# alone, a fresh checkout would produce CRLF in the working tree and
+# `ruff format --check` would fail on Windows. Pinning eol=lf here means the
+# working tree matches what CI on Linux sees.
+* text=auto eol=lf
+
+# Never rewrite binary files
+*.gif binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.png binary
+*.whl binary
+*.zip binary
+
+# Windows-only scripts need CRLF when they finally appear
+*.bat text eol=crlf
+*.cmd text eol=crlf

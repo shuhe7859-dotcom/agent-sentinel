@@ -1,0 +1,62 @@
+name: Bug report
+description: Something behaves differently from how it is documented.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do not use this form for a security
+        bypass — see [SECURITY.md](../blob/main/SECURITY.md) instead.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The smallest command or snippet that shows the problem.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: policy
+    attributes:
+      label: The policy in force
+      description: Paste the policy (redact anything private), or name the preset.
+      render: toml
+    validations:
+      required: false
+
+  - type: textarea
+    id: journal
+    attributes:
+      label: Journal excerpt and verify output
+      description: If the problem touches the log, include the relevant records and `sentinel journal verify` output.
+      render: shell
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: agent-sentinel version
+      description: Output of `sentinel version`.
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Platform and Python version
+      placeholder: Windows 11, Python 3.12.4
+    validations:
+      required: true
+
