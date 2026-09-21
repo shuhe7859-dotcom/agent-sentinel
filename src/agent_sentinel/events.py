@@ -50,6 +50,12 @@ class EventType(StrEnum):
     POLICY_DECISION = "policy.decision"
     """What the policy engine answered for a proposed action."""
 
+    APPROVAL_REQUESTED = "approval.requested"
+    """A ``review`` verdict was escalated to a human."""
+
+    APPROVAL_DECIDED = "approval.decided"
+    """Someone -- or something -- answered an escalation."""
+
     ACTION_RESULT = "action.result"
     """What actually happened: exit code, output digests, duration."""
 
@@ -102,6 +108,16 @@ def hash_record(prev_hash: str, body: Mapping[str, Any]) -> str:
     """Hash ``body`` together with its predecessor's hash."""
     material = f"{prev_hash}\n{canonical_dumps(body)}".encode()
     return hashlib.sha256(material).hexdigest()
+
+
+def content_digest(value: Any) -> str:
+    """A SHA-256 over the canonical form of ``value``, used for fingerprints.
+
+    Unlike :func:`hash_record` this is not part of the chain. It exists to give
+    two things a stable name -- a policy and an action -- so a record can refer
+    to them without repeating them in full.
+    """
+    return hashlib.sha256(canonical_dumps(value).encode()).hexdigest()
 
 
 @dataclass(frozen=True)

@@ -20,7 +20,19 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
+from ..approvals import (
+    SOURCE_CALLBACK,
+    SOURCE_CONFIG,
+    Approval,
+    ApprovalRequest,
+    approval_from_event,
+    find_grant,
+    record_decision,
+    request_approval,
+    request_from_event,
+)
 from ..errors import GuardError
 from ..events import Actor, EventType
 from ..journal import Journal
@@ -40,7 +52,8 @@ class GuardedResult:
 
     decision: Decision
     status: str
-    """One of ``executed``, ``timeout``, ``denied``, ``awaiting_approval``."""
+    """One of ``executed``, ``timeout``, ``denied``, ``awaiting_approval`` or
+    ``refused``."""
 
     returncode: int | None = None
     duration_ms: int = 0
@@ -48,6 +61,11 @@ class GuardedResult:
     stderr_preview: str = ""
     stdout_sha256: str | None = None
     stderr_sha256: str | None = None
+    approval_seq: int | None = None
+    """The ``approval.decided`` record this run consumed, if it needed one."""
+
+    approval_request: ApprovalRequest | None = None
+    """The escalation this run left waiting, if it stopped for review."""
 
     @property
     def executed(self) -> bool:
@@ -119,26 +137,76 @@ class GuardedRunner:
         if decision.effect is Effect.DENY:
             return self._refuse(decision, "denied")
 
-        if decision.effect is Effect.REVIEW and not self._approves(action, decision):
-            return self._refuse(decision, "awaiting_approval")
+        if decision.effect is Effect.REVIEW:
+            approval = self._authorise(action, decision)
+            if approval is None:
+                return self._refuse(decision, "awaiting_approval", escalate=action)
+            if not approval.granted:
+                return self._refuse(decision, "refused")
+            return self._execute(decision, command, self._timeout(timeout), approval.seq)
 
-        return self._execute(decision, command, timeout if timeout is not None else self.timeout)
+        return self._execute(decision, command, self._timeout(timeout))
 
     # ---------------------------------------------------------------- internal
-    def _approves(self, action: Action, decision: Decision) -> bool:
-        if self.reviewer is not None:
-            return bool(self.reviewer(action, decision))
-        return self.allow_review
+    def _timeout(self, timeout: float | None) -> float | None:
+        return timeout if timeout is not None else self.timeout
 
-    def _refuse(self, decision: Decision, status: str) -> GuardedResult:
+    def _authorise(self, action: Action, decision: Decision) -> Approval | None:
+        """Decide what a ``review`` verdict means for this action.
+
+        Returns an :class:`Approval` to act on -- ``granted=False`` means someone
+        said no -- or ``None`` when nobody has answered yet, in which case the
+        caller records an escalation and stops.
+        """
+        existing = find_grant(self.journal, action.fingerprint())
+        if existing is not None:
+            return existing
+
+        if self.reviewer is not None:
+            granted = bool(self.reviewer(action, decision))
+            event = record_decision(
+                self.journal,
+                action=action,
+                granted=granted,
+                source=SOURCE_CALLBACK,
+                note="answered by the configured reviewer callback",
+            )
+            return approval_from_event(event)
+
+        if self.allow_review:
+            event = record_decision(
+                self.journal,
+                action=action,
+                granted=True,
+                source=SOURCE_CONFIG,
+                note="pre-approved by allow_review",
+            )
+            return approval_from_event(event)
+
+        return None
+
+    def _refuse(
+        self, decision: Decision, status: str, *, escalate: Action | None = None
+    ) -> GuardedResult:
+        request: ApprovalRequest | None = None
+        if escalate is not None:
+            request = request_from_event(
+                request_approval(self.journal, action=escalate, decision=decision)
+            )
         self.journal.append(
             EventType.ACTION_RESULT,
             Actor.SENTINEL,
             {"status": status, "rule": decision.rule_id, "reason": decision.reason},
         )
-        return GuardedResult(decision=decision, status=status)
+        return GuardedResult(decision=decision, status=status, approval_request=request)
 
-    def _execute(self, decision: Decision, command: str, timeout: float | None) -> GuardedResult:
+    def _execute(
+        self,
+        decision: Decision,
+        command: str,
+        timeout: float | None,
+        approval_seq: int | None = None,
+    ) -> GuardedResult:
         started = time.perf_counter()
         try:
             completed = subprocess.run(  # noqa: S602 - shell semantics are intentional
@@ -156,17 +224,16 @@ class GuardedRunner:
             stdout = _as_text(exc.stdout)
             stderr = _as_text(exc.stderr)
             duration_ms = int((time.perf_counter() - started) * 1000)
-            self.journal.append(
-                EventType.ACTION_RESULT,
-                Actor.SENTINEL,
-                {
-                    "status": "timeout",
-                    "timeout_s": timeout,
-                    "duration_ms": duration_ms,
-                    "stdout_sha256": _digest(stdout),
-                    "stderr_sha256": _digest(stderr),
-                },
-            )
+            payload: dict[str, Any] = {
+                "status": "timeout",
+                "timeout_s": timeout,
+                "duration_ms": duration_ms,
+                "stdout_sha256": _digest(stdout),
+                "stderr_sha256": _digest(stderr),
+            }
+            if approval_seq is not None:
+                payload["approval_seq"] = approval_seq
+            self.journal.append(EventType.ACTION_RESULT, Actor.SENTINEL, payload)
             return GuardedResult(
                 decision=decision,
                 status="timeout",
@@ -175,6 +242,7 @@ class GuardedRunner:
                 stderr_preview=_preview(stderr),
                 stdout_sha256=_digest(stdout),
                 stderr_sha256=_digest(stderr),
+                approval_seq=approval_seq,
             )
         except OSError as exc:
             raise GuardError(f"cannot run {command!r}: {exc}") from exc
@@ -185,21 +253,20 @@ class GuardedRunner:
         stdout_digest = _digest(stdout)
         stderr_digest = _digest(stderr)
 
-        self.journal.append(
-            EventType.ACTION_RESULT,
-            Actor.SENTINEL,
-            {
-                "status": "executed",
-                "returncode": completed.returncode,
-                "duration_ms": duration_ms,
-                "stdout_sha256": stdout_digest,
-                "stdout_bytes": len(stdout.encode("utf-8")),
-                "stderr_sha256": stderr_digest,
-                "stderr_bytes": len(stderr.encode("utf-8")),
-                "stdout_preview": _preview(stdout),
-                "stderr_preview": _preview(stderr),
-            },
-        )
+        payload = {
+            "status": "executed",
+            "returncode": completed.returncode,
+            "duration_ms": duration_ms,
+            "stdout_sha256": stdout_digest,
+            "stdout_bytes": len(stdout.encode("utf-8")),
+            "stderr_sha256": stderr_digest,
+            "stderr_bytes": len(stderr.encode("utf-8")),
+            "stdout_preview": _preview(stdout),
+            "stderr_preview": _preview(stderr),
+        }
+        if approval_seq is not None:
+            payload["approval_seq"] = approval_seq
+        self.journal.append(EventType.ACTION_RESULT, Actor.SENTINEL, payload)
 
         return GuardedResult(
             decision=decision,
@@ -210,4 +277,5 @@ class GuardedRunner:
             stderr_preview=_preview(stderr),
             stdout_sha256=stdout_digest,
             stderr_sha256=stderr_digest,
+            approval_seq=approval_seq,
         )

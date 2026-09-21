@@ -15,6 +15,8 @@ from enum import StrEnum
 from re import Pattern
 from typing import Any
 
+from ..events import content_digest
+
 DEFAULT_PRIORITY = 100
 """Priority used when a rule does not declare one."""
 
@@ -80,6 +82,15 @@ class Action:
             data["metadata"] = dict(self.metadata)
         return data
 
+    def fingerprint(self) -> str:
+        """A digest of *what* this action is, ignoring where it runs.
+
+        Approvals are keyed on this value. Two commands that differ at all --
+        including by kind -- never share a fingerprint, which is what stops an
+        approval for one action from authorising a different one.
+        """
+        return content_digest({"kind": self.kind.value, "subject": self.subject})
+
 
 @dataclass(frozen=True)
 class Rule:
@@ -120,6 +131,32 @@ class Policy:
         Lower numbers are evaluated first, the way firewall rulesets read.
         """
         return tuple(sorted(self.rules, key=lambda rule: rule.priority))
+
+    def fingerprint(self) -> str:
+        """A digest of the policy's content, independent of where it was loaded.
+
+        Two policies with identical rules produce the same fingerprint; changing
+        any rule, its order, its effect or its reason changes it. Sessions record
+        it, so a journal can be tied to the exact policy that was in force.
+        """
+        return content_digest(
+            {
+                "name": self.name,
+                "default": self.default_effect.value,
+                "rules": [
+                    {
+                        "id": rule.id,
+                        "kind": sorted(kind.value for kind in rule.kind) if rule.kind else None,
+                        "effect": rule.effect.value,
+                        "priority": rule.priority,
+                        "pattern": rule.pattern.pattern,
+                        "reason": rule.reason,
+                        "tags": list(rule.tags),
+                    }
+                    for rule in self.rules
+                ],
+            }
+        )
 
 
 @dataclass(frozen=True)

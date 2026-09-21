@@ -23,6 +23,12 @@ import sys
 from collections.abc import Sequence
 
 from . import __version__
+from .approvals import (
+    SOURCE_OPERATOR,
+    approval_requests,
+    pending_requests,
+    record_decision,
+)
 from .errors import SentinelError
 from .guards.shell import GuardedRunner
 from .journal import Journal
@@ -30,6 +36,7 @@ from .policy.engine import PolicyEngine
 from .policy.loader import load_policy
 from .policy.models import Action, ActionKind, Effect
 from .policy.presets import available_presets, load_preset
+from .session import Session
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -94,9 +101,41 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("command", nargs=argparse.REMAINDER, help="the command, after '--'")
     run.set_defaults(handler=_handle_run)
 
+    # ----------------------------------------------------------------- approve
+    approve = subparsers.add_parser(
+        "approve",
+        help="record an approval, or a refusal, for an action that was reviewed",
+        epilog=(
+            "example: sentinel approve .sentinel/session.jsonl --request-seq 12\n"
+            "         sentinel approve .sentinel/session.jsonl --command 'git push --force' "
+            "--expires-in 30"
+        ),
+    )
+    approve.add_argument("journal", help="journal file to append to")
+    approve_source = approve.add_mutually_exclusive_group(required=True)
+    approve_source.add_argument(
+        "--request-seq", type=int, help="approve the escalation with this seq number"
+    )
+    approve_source.add_argument("--command", help="approve this command line directly")
+    approve.add_argument(
+        "--kind", default=ActionKind.SHELL.value, choices=[kind.value for kind in ActionKind]
+    )
+    approve.add_argument(
+        "--refuse", action="store_true", help="record a refusal instead of a grant"
+    )
+    approve.add_argument(
+        "--expires-in", type=float, default=None, metavar="MINUTES", help="how long the grant lasts"
+    )
+    approve.add_argument("--note", default="", help="why, in your own words")
+    approve.set_defaults(handler=_handle_approve)
+
     # ----------------------------------------------------------------- journal
     journal = subparsers.add_parser("journal", help="read and verify flight recorder files")
     journal_sub = journal.add_subparsers(dest="action", required=True)
+
+    pending = journal_sub.add_parser("pending", help="list escalations that still need a human")
+    pending.add_argument("path")
+    pending.set_defaults(handler=_handle_journal_pending)
 
     show = journal_sub.add_parser("show", help="print recorded events")
     show.add_argument("path")
@@ -158,17 +197,33 @@ def _handle_run(args: argparse.Namespace) -> int:
 
     engine = _resolve_engine(args.policy)
     journal = Journal(args.journal)
-    runner = GuardedRunner(
-        engine,
-        journal,
-        cwd=args.cwd,
-        allow_review=args.allow_review,
-        timeout=args.timeout,
-    )
-    result = runner.run(" ".join(command))
+    with Session(engine, journal, cwd=args.cwd) as session:
+        runner = GuardedRunner(
+            engine,
+            journal,
+            cwd=args.cwd,
+            allow_review=args.allow_review,
+            timeout=args.timeout,
+        )
+        result = runner.run(" ".join(command))
 
+    print(
+        f"policy:  {engine.name} (fingerprint {engine.policy.fingerprint()[:12]})",
+        file=sys.stderr,
+    )
     print(result.decision.render(), file=sys.stderr)
     print(f"status:  {result.status}", file=sys.stderr)
+    if result.approval_seq is not None:
+        print(f"approval: granted by event #{result.approval_seq}", file=sys.stderr)
+    if result.approval_request is not None:
+        print(
+            "this is waiting for a human. to grant it:\n"
+            f"  sentinel approve {args.journal} --request-seq {result.approval_request.seq}\n"
+            "then run the command again",
+            file=sys.stderr,
+        )
+    if session.info is not None:
+        print(f"session: {session.info.render()}", file=sys.stderr)
 
     if result.stdout_preview:
         sys.stdout.write(result.stdout_preview)
@@ -177,10 +232,52 @@ def _handle_run(args: argparse.Namespace) -> int:
 
     if result.status == "denied":
         return EXIT_DENY
-    if result.status == "awaiting_approval":
+    if result.status in {"awaiting_approval", "refused"}:
         return EXIT_REVIEW
     if result.returncode:
         return EXIT_COMMAND_FAILED
+    return EXIT_OK
+
+
+def _handle_approve(args: argparse.Namespace) -> int:
+    journal = Journal(args.journal)
+    action = _resolve_approved_action(journal, args)
+    event = record_decision(
+        journal,
+        action=action,
+        granted=not args.refuse,
+        source=SOURCE_OPERATOR,
+        note=args.note,
+        request_seq=args.request_seq,
+        expires_in_seconds=None if args.expires_in is None else args.expires_in * 60,
+    )
+    verdict = "refused" if args.refuse else "granted"
+    print(
+        f"recorded approval #{event.seq} ({verdict}) for "
+        f"{action.kind.value} {action.subject}\n"
+        f"fingerprint: {action.fingerprint()[:16]}"
+    )
+    return EXIT_OK
+
+
+def _resolve_approved_action(journal: Journal, args: argparse.Namespace) -> Action:
+    """Turn ``--request-seq`` or ``--command`` into the action being approved."""
+    if args.request_seq is None:
+        return Action(kind=ActionKind(args.kind), target=args.command)
+    for request in approval_requests(journal):
+        if request.seq == args.request_seq:
+            return Action(kind=ActionKind(request.kind), target=request.command)
+    raise SentinelError(f"{args.journal}: no approval request recorded as #{args.request_seq}")
+
+
+def _handle_journal_pending(args: argparse.Namespace) -> int:
+    pending = pending_requests(Journal(args.path))
+    if not pending:
+        print("no approvals pending")
+        return EXIT_OK
+    for request in pending:
+        print(request.render())
+        print(f"        to approve: sentinel approve {args.path} --request-seq {request.seq}")
     return EXIT_OK
 
 
