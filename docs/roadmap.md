@@ -15,19 +15,21 @@ The skeleton a project can be built on.
 - [x] `permissive`, `standard`, `strict` presets
 - [x] Guarded shell execution recording proposal, decision and outcome
 - [x] `sentinel` CLI with stable exit codes
-- [x] 79 tests covering the above
+- [x] 125 tests covering the above
 
-## M1 — Close the loop on approvals
+## M1 — Close the loop on approvals ✅
 
-Right now a `review` verdict simply stops. The missing piece is that the human
-"yes" is itself evidence.
+A `review` verdict no longer merely stops. The human answer is written into the
+same hash chain, scoped to one action, and spent when it is used.
 
-- [ ] `sentinel approve` to record an approval as a first-class, hash-chained event
-- [ ] `GuardedRunner(reviewer=...)` documented and tested against an interactive prompt
-- [ ] A `session.start` / `session.end` pair written by the CLI, with the policy
+- [x] `sentinel approve` to record an approval as a first-class, hash-chained event
+- [x] `sentinel journal pending` to list escalations that still need a human
+- [x] `GuardedRunner(reviewer=...)` and `allow_review`, both documented and tested,
+      each leaving a record of who answered
+- [x] A `session.start` / `session.end` pair written by the CLI, with the policy
       identity and its digest in the payload
-- [ ] An approval that expires: approving command X should not silently approve
-      every later command matching the same rule
+- [x] Approvals that expire, and that are scoped to one action rather than one rule
+- [ ] An interactive terminal reviewer (`sentinel run --interactive`)
 
 ## M2 — Guards for the other three surfaces
 

@@ -42,26 +42,41 @@ an actual action.
 ## What happens to one command
 
 ```
+①  session.start ...... which policy, and a fingerprint of its content
+              │
 agent:      "pytest -q"
               │
               ▼
-  ①  journal.append(action.proposed)          ← recorded before anything else
+②  journal.append(action.proposed)          ← recorded before anything else
               │
               ▼
-  ②  engine.evaluate(Action)                  ← first matching rule wins
+③  engine.evaluate(Action)                  ← first matching rule wins
               │
-      ┌───────┼───────────────┐
-      ▼       ▼               ▼
-   deny    review          allow
-      │       │               │
-      │       │               ▼
-      │       │      ③ subprocess runs the command
-      │       │               │
-      ▼       ▼               ▼
-  ④  journal.append(action.result, status=denied | awaiting_approval | executed)
+   ┌──────────┼───────────────┬─────────────────────────┐
+   ▼          ▼               ▼                         │
+ deny      review          allow                       │
+   │          │               │                         │
+   │          │               ▼                         │
+   │          │      ④ subprocess runs the command      │
+   │          │               │                         │
+   │          ▼               │                         │
+   │   ④' is there a usable   │                         │
+   │      approval for this   │                         │
+   │      exact action?       │                         │
+   │       │        │         │                         │
+   │      yes       no        │                         │
+   │       │        │         │                         │
+   │       │        └──▶ approval.requested             │
+   │       │             (waiting for a human)          │
+   ▼       ▼               ▼                           ▼
+⑤  journal.append(action.result, status =
+      denied | refused | awaiting_approval | executed | timeout)
               │
               ▼
-  ⑤  exit code: 3 / 2 / 0
+⑥  session.end ........ number of actions, outcome, head hash
+              │
+              ▼
+⑦  exit code: 3 / 2 / 0
 ```
 
 Two properties fall out of this ordering:
@@ -71,12 +86,23 @@ Two properties fall out of this ordering:
 * the *decision* is recorded next to the intent, so the log explains itself
   without needing the policy file that was in force at the time.
 
+A third comes from the session frame: `session.start` records the policy's name
+and a fingerprint of its content, so "what was it allowed to do?" is answerable
+months later without guessing which revision of the policy file was on disk.
+
+An approval is not an exception to the policy. It is a separate, recorded
+decision that authorises one execution of one action; see
+[`approvals.md`](approvals.md).
+
 ## Module map
 
 | Path | Responsibility |
 | --- | --- |
+| `src/agent_sentinel/_version.py` | The single definition of the version string. |
 | `src/agent_sentinel/events.py` | The record format, canonical JSON, the hash function. |
 | `src/agent_sentinel/journal.py` | Append-only file I/O, chain verification, reports. |
+| `src/agent_sentinel/approvals.py` | Reading and writing approvals; scope, single use, expiry. |
+| `src/agent_sentinel/session.py` | Framing work with `session.start` / `session.end`. |
 | `src/agent_sentinel/policy/models.py` | `Action`, `Rule`, `Policy`, `Decision`, `Effect`. |
 | `src/agent_sentinel/policy/loader.py` | TOML parsing and validation into the model. |
 | `src/agent_sentinel/policy/engine.py` | Rule ordering, matching, verdict. |
@@ -140,12 +166,17 @@ Implemented and covered by tests:
 * TOML policy loading, validation and rule matching;
 * the three presets;
 * guarded shell execution with propose/decide/run/record;
+* approvals as first-class records: action-scoped, single use, expirable, and
+  readable back out of the journal;
+* sessions that record the policy identity and a fingerprint of its content;
+* `reviewer` callbacks and `allow_review`, both of which leave a record saying
+  who answered and why they were asked;
 * the `sentinel` CLI with stable exit codes.
 
 Designed but not built yet (see [`roadmap.md`](roadmap.md)):
 
 * guards for filesystem writes, deletes and network egress;
-* an append-only *approval* record, so a human "yes" is itself auditable;
+* an interactive terminal reviewer for `sentinel run`;
 * `journal replay` and `journal export`;
 * adapters for agent frameworks and an MCP server;
 * signed journals and external anchoring of the head hash.
@@ -156,6 +187,7 @@ Designed but not built yet (see [`roadmap.md`](roadmap.md)):
 | --- | --- |
 | What may run | `policy/` |
 | What is written down | `journal/` |
+| Who authorised an escalation | `approvals.py`, recorded in the same chain |
+| Which policy was in force | `session.py` and `Policy.fingerprint()` |
 | Whether the record is intact | `journal.verify()` |
 | Whether the machine is actually isolated | *not this project* — see [`threat-model.md`](threat-model.md) |
-

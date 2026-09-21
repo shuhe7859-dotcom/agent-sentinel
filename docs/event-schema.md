@@ -29,12 +29,38 @@ means "there is exactly one byte sequence for this record".
 
 | Type | Actor | Payload |
 | --- | --- | --- |
-| `session.start` | agent / human | Context for the session. |
+| `session.start` | sentinel | `session_id`, `policy`, `policy_fingerprint`, `policy_source`, `policy_default`, `rules`, `cwd`, `tool`, `metadata`. |
 | `action.proposed` | agent | `kind`, `target`, optional `argv`, `cwd`, `metadata`. |
 | `policy.decision` | sentinel | `effect`, `rule`, `reason`, `policy`. |
-| `action.result` | sentinel | `status` plus what the guarded step observed. |
+| `approval.requested` | sentinel | `fingerprint`, `kind`, `command`, `target`, `rule`, `reason`, `policy`. |
+| `approval.decided` | human / sentinel | `granted`, `fingerprint`, `kind`, `command`, `request_seq`, `expires_at`, `source`, `note`. |
+| `action.result` | sentinel | `status` plus what the guarded step observed, and `approval_seq` when an approval was consumed. |
 | `note` | human / agent | `message`. |
-| `session.end` | human | Summary of the session. |
+| `session.end` | sentinel | `session_id`, `actions`, `outcome` (`ok` or `error`), `head`. |
+
+### `session.start`
+
+`policy_fingerprint` is a SHA-256 over the policy's content, and is independent
+of where the file was loaded from. It is what ties a journal to the exact rules
+that were in force: reload the policy revision you think was used, call
+`Policy.fingerprint()`, and compare. `head` in `session.end` is the digest of
+the last record written *before* the session closed, which is a convenient value
+to publish somewhere else (see milestone M3).
+
+### `approval.decided`
+
+`source` says why an answer exists, and is one of:
+
+| Source | Meaning |
+| --- | --- |
+| `operator` | Someone ran `sentinel approve`. |
+| `callback` | A `reviewer` callback answered inside the run. |
+| `config` | `allow_review` pre-approved the run. Nobody was asked. |
+
+`fingerprint` is a digest of the action's kind and its normalised command or
+path, so a grant authorises exactly one action. `expires_at`, when present, is
+an ISO-8601 UTC instant after which the grant stops counting. See
+[`approvals.md`](approvals.md) for the full rules.
 
 ### `action.result` statuses
 
@@ -43,7 +69,12 @@ means "there is exactly one byte sequence for this record".
 | `executed` | The command ran. | `returncode`, `duration_ms`, digests, byte counts, previews |
 | `timeout` | The command was killed at the deadline. | `timeout_s`, `duration_ms`, digests |
 | `denied` | Policy refused; nothing ran. | `rule`, `reason` |
-| `awaiting_approval` | Policy asked for review and none was given. | `rule`, `reason` |
+| `awaiting_approval` | Policy asked for review and nobody has answered. | `rule`, `reason` |
+| `refused` | A reviewer callback answered "no". | `rule`, `reason` |
+
+`approval_seq` is present whenever an approval authorised the execution. A
+`sentinel journal verify`-style reader can therefore tell, for every execution,
+which human decision let it happen -- and can mark that approval as spent.
 
 ## The hash chain
 

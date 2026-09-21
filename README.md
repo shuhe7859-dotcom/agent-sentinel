@@ -2,11 +2,13 @@
 
 **Guardrails and a flight recorder for coding agents.**
 
+English | [简体中文](README.zh-CN.md)
+
 [![CI](https://github.com/shuhe7859-dotcom/agent-sentinel/actions/workflows/ci.yml/badge.svg)](https://github.com/shuhe7859-dotcom/agent-sentinel/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/tests-79%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen.svg)](tests/)
 
 A coding agent edits your files, runs your commands and talks to the network.
 Two questions follow, and together they are the whole project:
@@ -37,9 +39,8 @@ an actual action.
 
 ## Status
 
-Early, but working. This is the foundation release: the record format, the
-policy engine and one guarded surface (shell) are implemented and covered by
-79 tests.
+Early, but working. The record format, the policy engine, one guarded surface
+(shell) and the approval loop are implemented and covered by 125 tests.
 
 | Area | State |
 | --- | --- |
@@ -49,9 +50,10 @@ policy engine and one guarded surface (shell) are implemented and covered by
 | Policy engine: priority ordering, reasoned decisions | implemented |
 | `permissive` / `standard` / `strict` presets | implemented |
 | Guarded shell execution (propose, decide, run, record) | implemented |
+| Approvals as first-class, single-use, expirable records | implemented |
+| Sessions that record which policy was in force | implemented |
 | `sentinel` CLI with stable exit codes | implemented |
 | Guards for filesystem and network | planned (M2) |
-| Approvals recorded as first-class events | planned (M1) |
 | Head-hash anchoring and record signing | planned (M3) |
 | MCP server, framework adapters, journal replay | planned (M4) |
 
@@ -121,6 +123,34 @@ status:  BROKEN - 1 issue(s)
 
 That is the point of the design: the log does not stop tampering, it makes
 tampering visible.
+
+### Approve something that was escalated
+
+A `review` verdict does not just stop — the human answer is recorded too, scoped
+to that one command:
+
+```console
+$ sentinel run --policy standard --journal .sentinel/session.jsonl -- echo .netrc
+status:  awaiting_approval
+this is waiting for a human. to grant it:
+  sentinel approve .sentinel/session.jsonl --request-seq 4
+then run the command again
+
+$ sentinel journal pending .sentinel/session.jsonl
+#4    shell       echo .netrc
+        shell.credential-access: reading credential material
+
+$ sentinel approve .sentinel/session.jsonl --request-seq 4 --note "checked with the team"
+recorded approval #7 (granted) for shell echo .netrc
+
+$ sentinel run --policy standard --journal .sentinel/session.jsonl -- echo .netrc
+status:  executed
+approval: granted by event #7
+```
+
+The policy still says `review` — the approval authorised one execution of one
+action, and running it again asks again. Read
+[`docs/approvals.md`](docs/approvals.md) for the rules.
 
 ## Using the library
 
@@ -201,7 +231,9 @@ project-specific policy is to copy it and narrow it.
 | `sentinel policy presets` | List the built-in policies. |
 | `sentinel policy check --policy P --kind K --target T [--json]` | Evaluate one action; run nothing. |
 | `sentinel run --policy P --journal J [--cwd D] [--timeout S] [--allow-review] -- CMD…` | Run a command through the guardrail and record it. |
+| `sentinel approve J --request-seq N [--expires-in MIN] [--note T] [--refuse]` | Record a human answer for an escalated action. |
 | `sentinel journal show J [--limit N] [--json]` | Print recorded events. |
+| `sentinel journal pending J` | List escalations that still need a human. |
 | `sentinel journal verify J` | Verify the hash chain. |
 | `sentinel journal note J "text"` | Append a human annotation. |
 | `sentinel version` | Print the version. |
@@ -225,6 +257,8 @@ agent-sentinel/
 ├── src/agent_sentinel/
 │   ├── events.py            record format, canonical JSON, hashing
 │   ├── journal.py           append-only file, chain verification
+│   ├── approvals.py         human answers: scope, single use, expiry
+│   ├── session.py           session.start / session.end framing
 │   ├── errors.py            exception hierarchy
 │   ├── cli.py               the `sentinel` command
 │   ├── policy/
@@ -244,6 +278,7 @@ agent-sentinel/
 ├── docs/
 │   ├── architecture.md      layers, data flow, extension points
 │   ├── policy-reference.md  every key a policy can use
+│   ├── approvals.md         how a human "yes" becomes evidence
 │   ├── event-schema.md      the on-disk record format
 │   ├── threat-model.md      what this defends against, and what it does not
 │   ├── roadmap.md           milestones
@@ -277,6 +312,7 @@ are written out in [`docs/threat-model.md`](docs/threat-model.md).
 | --- | --- |
 | [`docs/architecture.md`](docs/architecture.md) | You want to know how the pieces fit, or where to add a guard. |
 | [`docs/policy-reference.md`](docs/policy-reference.md) | You are writing or reviewing a policy. |
+| [`docs/approvals.md`](docs/approvals.md) | You are deciding how a human should answer an escalation. |
 | [`docs/event-schema.md`](docs/event-schema.md) | You want to read a journal without this library, or change the format. |
 | [`docs/threat-model.md`](docs/threat-model.md) | You need to know what is in scope, and what is not. |
 | [`docs/development.md`](docs/development.md) | You are setting up, contributing, or releasing. |
