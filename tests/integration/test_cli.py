@@ -6,11 +6,15 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from agent_sentinel import Actor, EventType, __version__, cli
 from agent_sentinel.journal import Journal
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from conftest import LocalServer
 
 
 def _event_types(path: Path) -> list[str]:
@@ -23,6 +27,12 @@ def _results(path: Path) -> list[dict[str, object]]:
         for event in Journal(path).read()
         if event.type is EventType.ACTION_RESULT
     ]
+
+
+def _pending_seq(journal_path: Path, capsys: pytest.CaptureFixture[str]) -> int:
+    """Ask what is pending and read the seq number out of the printed hint."""
+    cli.main(["journal", "pending", str(journal_path)])
+    return int(re.search(r"--request-seq (\d+)", capsys.readouterr().out).group(1))
 
 
 def test_version(capsys: pytest.CaptureFixture[str]) -> None:
@@ -367,3 +377,230 @@ def test_approving_an_unknown_request_is_reported(
 
     assert code == cli.EXIT_ERROR
     assert "no approval request recorded as #999" in capsys.readouterr().err
+
+
+# ----------------------------------------------------------- guarded writes
+def _write_args(journal_path: Path, workspace: Path, path: str, **extra: str) -> list[str]:
+    args = [
+        "write",
+        "--policy",
+        "standard",
+        "--journal",
+        str(journal_path),
+        "--workspace",
+        str(workspace),
+        path,
+    ]
+    for key, value in extra.items():
+        args += [f"--{key.replace('_', '-')}", value]
+    return args
+
+
+def test_write_writes_the_file_and_frames_a_session(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = tmp_path / "session.jsonl"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    code = cli.main(_write_args(journal_path, workspace, "notes.txt", content="hello"))
+
+    assert code == cli.EXIT_OK
+    assert (workspace / "notes.txt").read_text(encoding="utf-8") == "hello"
+    assert _event_types(journal_path) == [
+        "session.start",
+        "action.proposed",
+        "policy.decision",
+        "action.result",
+        "session.end",
+    ]
+    assert _results(journal_path)[-1]["status"] == "written"
+    assert Path(Journal(journal_path).read()[0].payload["workspace"]) == workspace.resolve()
+
+    err = capsys.readouterr().err
+    assert "written" in err
+    assert "sha256" in err
+    assert Journal(journal_path).verify().ok
+
+
+def test_write_can_read_the_content_from_a_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = tmp_path / "session.jsonl"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    source = tmp_path / "source.txt"
+    source.write_text("from a file", encoding="utf-8")
+    capsys.readouterr()
+
+    code = cli.main(_write_args(journal_path, workspace, "copy.txt", **{"from_file": str(source)}))
+
+    assert code == cli.EXIT_OK
+    assert (workspace / "copy.txt").read_text(encoding="utf-8") == "from a file"
+
+
+def test_write_outside_the_workspace_is_denied(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = tmp_path / "session.jsonl"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+
+    code = cli.main(_write_args(journal_path, workspace, "../escape.txt", content="nope"))
+
+    assert code == cli.EXIT_DENY
+    assert not (tmp_path / "escape.txt").exists()
+    assert "outside the workspace" in capsys.readouterr().err
+
+
+def test_write_to_a_reviewed_path_needs_approving_twice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = tmp_path / "session.jsonl"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    args = _write_args(journal_path, workspace, ".env", content="TOKEN=1")
+
+    assert cli.main(args) == cli.EXIT_REVIEW
+    capsys.readouterr()
+    assert not (workspace / ".env").exists()
+
+    cli.main(
+        ["approve", str(journal_path), "--request-seq", str(_pending_seq(journal_path, capsys))]
+    )
+    capsys.readouterr()
+
+    assert cli.main(args) == cli.EXIT_OK
+    assert (workspace / ".env").read_text(encoding="utf-8") == "TOKEN=1"
+
+    assert cli.main(args) == cli.EXIT_REVIEW
+
+
+def test_delete_removes_a_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    journal_path = tmp_path / "session.jsonl"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "junk.txt").write_text("bye", encoding="utf-8")
+
+    code = cli.main(
+        [
+            "delete",
+            "--policy",
+            "standard",
+            "--journal",
+            str(journal_path),
+            "--workspace",
+            str(workspace),
+            "junk.txt",
+        ]
+    )
+
+    assert code == cli.EXIT_OK
+    assert not (workspace / "junk.txt").exists()
+    assert _results(journal_path)[-1]["status"] == "deleted"
+    assert "deleted" in capsys.readouterr().err
+
+
+def test_delete_reports_a_directory_as_out_of_scope(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = tmp_path / "session.jsonl"
+    workspace = tmp_path / "ws"
+    (workspace / "build").mkdir(parents=True)
+
+    code = cli.main(
+        [
+            "delete",
+            "--policy",
+            "standard",
+            "--journal",
+            str(journal_path),
+            "--workspace",
+            str(workspace),
+            "build",
+        ]
+    )
+
+    assert code == cli.EXIT_COMMAND_FAILED
+    assert "out of scope" in capsys.readouterr().err
+    assert (workspace / "build").is_dir()
+
+
+# ----------------------------------------------------------- guarded fetching
+def _fetch_args(journal_path: Path, workspace: Path, url: str, **extra: str) -> list[str]:
+    args = [
+        "fetch",
+        "--policy",
+        "standard",
+        "--journal",
+        str(journal_path),
+        "--workspace",
+        str(workspace),
+        url,
+    ]
+    for key, value in extra.items():
+        args += [f"--{key.replace('_', '-')}", value]
+    return args
+
+
+def test_fetch_refuses_a_file_url(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    journal_path = tmp_path / "session.jsonl"
+
+    code = cli.main(_fetch_args(journal_path, tmp_path, "file:///etc/passwd"))
+
+    assert code == cli.EXIT_DENY
+    assert "only fetches http and https" in capsys.readouterr().err
+    assert "file://" in json.dumps([event.to_record() for event in Journal(journal_path).read()])
+
+
+def test_fetch_prints_the_body_and_records_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], server: LocalServer
+) -> None:
+    journal_path = tmp_path / "session.jsonl"
+    policy = tmp_path / "allow.toml"
+    policy.write_text(
+        f'schema = 1\nname = "allow-local"\ndefault = "deny"\n\n'
+        f"[[rules]]\nid = 'net.allow'\nkind = 'network'\neffect = 'allow'\n"
+        f"pattern = '^{re.escape(server.host)}$'\n",
+        encoding="utf-8",
+    )
+
+    code = cli.main(
+        [
+            "fetch",
+            "--policy",
+            str(policy),
+            "--journal",
+            str(journal_path),
+            server.url("/hello"),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert code == cli.EXIT_OK
+    assert captured.out == server.body.decode()
+    assert "200" in captured.err
+    assert _results(journal_path)[-1]["status"] == "fetched"
+    assert server.hits == ["/hello"]
+
+
+def test_fetch_reports_an_error_status(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], server: LocalServer
+) -> None:
+    journal_path = tmp_path / "session.jsonl"
+    policy = tmp_path / "allow.toml"
+    policy.write_text(
+        f'schema = 1\nname = "allow-local"\ndefault = "review"\n\n'
+        f"[[rules]]\nid = 'net.allow'\nkind = 'network'\neffect = 'allow'\n"
+        f"pattern = '^{re.escape(server.host)}$'\n",
+        encoding="utf-8",
+    )
+
+    code = cli.main(
+        ["fetch", "--policy", str(policy), "--journal", str(journal_path), server.url("/missing")]
+    )
+    captured = capsys.readouterr()
+
+    assert code == cli.EXIT_COMMAND_FAILED
+    assert captured.out == "nope"
+    assert "404" in captured.err

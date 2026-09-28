@@ -60,12 +60,14 @@ class Session:
         journal: Journal,
         *,
         cwd: str | None = None,
+        workspace: str | None = None,
         session_id: str | None = None,
         metadata: Mapping[str, Any] | None = None,
     ) -> None:
         self.engine = engine
         self.journal = journal
         self.cwd = cwd
+        self.workspace = workspace
         self.session_id = session_id or uuid.uuid4().hex
         self.metadata = dict(metadata or {})
         self._start: Event | None = None
@@ -102,6 +104,7 @@ class Session:
                 "policy_default": policy.default_effect.value,
                 "rules": len(self.engine.rules),
                 "cwd": self.cwd,
+                "workspace": self.workspace,
                 "tool": f"agent-sentinel {__version__}",
                 "metadata": self.metadata,
             },

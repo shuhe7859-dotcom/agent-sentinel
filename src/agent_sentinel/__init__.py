@@ -31,7 +31,17 @@ from .errors import (
     SentinelError,
 )
 from .events import GENESIS_HASH, Actor, Event, EventType
-from .guards.shell import GuardedResult, GuardedRunner
+from .guards import (
+    FileSystemResult,
+    Guard,
+    GuardedFileSystem,
+    GuardedNetwork,
+    GuardedResult,
+    GuardedRunner,
+    GuardedShell,
+    GuardResult,
+    NetworkResult,
+)
 from .journal import IntegrityIssue, Journal, VerifyReport, read_events, verify_file
 from .policy.engine import PolicyEngine
 from .policy.loader import load_policy, parse_policy
@@ -55,13 +65,20 @@ __all__ = [
     "Effect",
     "Event",
     "EventType",
+    "FileSystemResult",
+    "Guard",
     "GuardError",
+    "GuardResult",
+    "GuardedFileSystem",
+    "GuardedNetwork",
     "GuardedResult",
     "GuardedRunner",
+    "GuardedShell",
     "IntegrityIssue",
     "Journal",
     "JournalError",
     "JournalIntegrityError",
+    "NetworkResult",
     "Policy",
     "PolicyEngine",
     "PolicyError",

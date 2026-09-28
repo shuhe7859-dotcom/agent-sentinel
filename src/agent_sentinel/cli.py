@@ -21,6 +21,7 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
 from . import __version__
 from .approvals import (
@@ -30,7 +31,13 @@ from .approvals import (
     record_decision,
 )
 from .errors import SentinelError
-from .guards.shell import GuardedRunner
+from .guards import (
+    DEFAULT_MAX_BYTES,
+    GuardedFileSystem,
+    GuardedNetwork,
+    GuardedShell,
+    GuardResult,
+)
 from .journal import Journal
 from .policy.engine import PolicyEngine
 from .policy.loader import load_policy
@@ -91,6 +98,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--journal", required=True, help="journal file to append to")
     run.add_argument("--cwd", default=None, help="working directory for the command")
     run.add_argument(
+        "--workspace",
+        default=None,
+        help="workspace root to record in the session (default: current directory)",
+    )
+    run.add_argument(
         "--timeout", type=float, default=None, help="seconds before the command is killed"
     )
     run.add_argument(
@@ -100,6 +112,52 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument("command", nargs=argparse.REMAINDER, help="the command, after '--'")
     run.set_defaults(handler=_handle_run)
+
+    # ---------------------------------------------------------------- filesystem
+    write = subparsers.add_parser(
+        "write",
+        help="write a file through the guardrail, inside the workspace",
+        epilog=(
+            "example: sentinel write --policy standard --journal .sentinel/session.jsonl "
+            "--workspace . notes/todo.md --content 'hello'"
+        ),
+    )
+    _add_guard_arguments(write)
+    write.add_argument("--create-parents", action="store_true", help="create missing directories")
+    content = write.add_mutually_exclusive_group()
+    content.add_argument("--content", default=None, help="text to write")
+    content.add_argument("--from-file", default=None, help="read the content from this file")
+    write.add_argument("path", help="destination path, relative to the workspace")
+    write.set_defaults(handler=_handle_write)
+
+    delete = subparsers.add_parser(
+        "delete",
+        help="delete a single file through the guardrail",
+        epilog=(
+            "example: sentinel delete --policy standard --journal .sentinel/session.jsonl "
+            "notes/todo.md"
+        ),
+    )
+    _add_guard_arguments(delete)
+    delete.add_argument("path", help="path to remove, relative to the workspace")
+    delete.set_defaults(handler=_handle_delete)
+
+    fetch = subparsers.add_parser(
+        "fetch",
+        help="fetch a URL through the guardrail; the guard makes the request",
+        epilog=(
+            "example: sentinel fetch --policy standard --journal .sentinel/session.jsonl "
+            "https://example.com/"
+        ),
+    )
+    _add_guard_arguments(fetch)
+    fetch.add_argument("--method", default="GET", help="HTTP method (default: GET)")
+    fetch.add_argument("--timeout", type=float, default=None, help="seconds before giving up")
+    fetch.add_argument(
+        "--max-bytes", type=int, default=DEFAULT_MAX_BYTES, help="how much of the body to read"
+    )
+    fetch.add_argument("url", help="the URL to fetch")
+    fetch.set_defaults(handler=_handle_fetch)
 
     # ----------------------------------------------------------------- approve
     approve = subparsers.add_parser(
@@ -159,10 +217,73 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # ------------------------------------------------------------------ handlers
+def _add_guard_arguments(parser: argparse.ArgumentParser) -> None:
+    """The options that every guarded action shares."""
+    parser.add_argument("--policy", required=True, help="preset name or path to a .toml file")
+    parser.add_argument("--journal", required=True, help="journal file to append to")
+    parser.add_argument(
+        "--workspace",
+        default=None,
+        help="workspace root (default: current directory)",
+    )
+    parser.add_argument(
+        "--allow-review",
+        action="store_true",
+        help="treat 'review' as 'allow' (records the decision either way)",
+    )
+
+
 def _resolve_engine(engine_source: str) -> PolicyEngine:
     if engine_source in available_presets():
         return PolicyEngine(load_preset(engine_source))
     return PolicyEngine(load_policy(engine_source))
+
+
+def _workspace_of(args: argparse.Namespace) -> Path:
+    """The workspace root for this run: what was asked for, or the current directory."""
+    raw = getattr(args, "workspace", None)
+    return Path(raw).expanduser().resolve() if raw else Path.cwd().resolve()
+
+
+def _report(
+    result: GuardResult,
+    *,
+    engine: PolicyEngine,
+    journal_path: str,
+    session: Session,
+    detail: str = "",
+) -> None:
+    """Print what happened, to stderr, in the order a reader wants it."""
+    print(
+        f"policy:  {engine.name} (fingerprint {engine.policy.fingerprint()[:12]})",
+        file=sys.stderr,
+    )
+    print(result.decision.render(), file=sys.stderr)
+    if detail:
+        print(detail, file=sys.stderr)
+    print(f"status:  {result.status}", file=sys.stderr)
+    if result.approval_seq is not None:
+        print(f"approval: granted by event #{result.approval_seq}", file=sys.stderr)
+    if result.approval_request is not None:
+        print(
+            "this is waiting for a human. to grant it:\n"
+            f"  sentinel approve {journal_path} --request-seq {result.approval_request.seq}\n"
+            "then run it again",
+            file=sys.stderr,
+        )
+    if session.info is not None:
+        print(f"session: {session.info.render()}", file=sys.stderr)
+
+
+def _exit_for(result: GuardResult, *, failed: bool = False) -> int:
+    """Map a guard result onto the documented exit codes."""
+    if result.status == "denied":
+        return EXIT_DENY
+    if result.status in {"refused", "awaiting_approval"}:
+        return EXIT_REVIEW
+    if failed or result.status in {"failed", "timeout"}:
+        return EXIT_COMMAND_FAILED
+    return EXIT_OK
 
 
 def _handle_version(args: argparse.Namespace) -> int:
@@ -197,8 +318,9 @@ def _handle_run(args: argparse.Namespace) -> int:
 
     engine = _resolve_engine(args.policy)
     journal = Journal(args.journal)
-    with Session(engine, journal, cwd=args.cwd) as session:
-        runner = GuardedRunner(
+    workspace = _workspace_of(args)
+    with Session(engine, journal, cwd=args.cwd, workspace=str(workspace)) as session:
+        runner = GuardedShell(
             engine,
             journal,
             cwd=args.cwd,
@@ -207,36 +329,101 @@ def _handle_run(args: argparse.Namespace) -> int:
         )
         result = runner.run(" ".join(command))
 
-    print(
-        f"policy:  {engine.name} (fingerprint {engine.policy.fingerprint()[:12]})",
-        file=sys.stderr,
-    )
-    print(result.decision.render(), file=sys.stderr)
-    print(f"status:  {result.status}", file=sys.stderr)
-    if result.approval_seq is not None:
-        print(f"approval: granted by event #{result.approval_seq}", file=sys.stderr)
-    if result.approval_request is not None:
-        print(
-            "this is waiting for a human. to grant it:\n"
-            f"  sentinel approve {args.journal} --request-seq {result.approval_request.seq}\n"
-            "then run the command again",
-            file=sys.stderr,
-        )
-    if session.info is not None:
-        print(f"session: {session.info.render()}", file=sys.stderr)
-
+    _report(result, engine=engine, journal_path=args.journal, session=session)
     if result.stdout_preview:
         sys.stdout.write(result.stdout_preview)
     if result.stderr_preview:
         sys.stderr.write(result.stderr_preview)
+    return _exit_for(result, failed=bool(result.returncode))
 
-    if result.status == "denied":
-        return EXIT_DENY
-    if result.status in {"awaiting_approval", "refused"}:
-        return EXIT_REVIEW
-    if result.returncode:
-        return EXIT_COMMAND_FAILED
-    return EXIT_OK
+
+def _handle_write(args: argparse.Namespace) -> int:
+    engine = _resolve_engine(args.policy)
+    journal = Journal(args.journal)
+    payload = _write_payload(args)
+    workspace = _workspace_of(args)
+
+    with Session(engine, journal, cwd=str(Path.cwd()), workspace=str(workspace)) as session:
+        guard = GuardedFileSystem(
+            engine, journal, workspace=workspace, allow_review=args.allow_review
+        )
+        result = guard.write(args.path, payload, create_parents=args.create_parents)
+
+    detail = f"target:  {result.path} -> {result.resolved}"
+    if result.status == "written":
+        detail += f" ({result.bytes_written} bytes, sha256 {(result.sha256 or '')[:12]})"
+    _report(result, engine=engine, journal_path=args.journal, session=session, detail=detail)
+    if result.error:
+        print(f"error:   {result.error}", file=sys.stderr)
+    return _exit_for(result)
+
+
+def _handle_delete(args: argparse.Namespace) -> int:
+    engine = _resolve_engine(args.policy)
+    journal = Journal(args.journal)
+    workspace = _workspace_of(args)
+
+    with Session(engine, journal, cwd=str(Path.cwd()), workspace=str(workspace)) as session:
+        guard = GuardedFileSystem(
+            engine, journal, workspace=workspace, allow_review=args.allow_review
+        )
+        result = guard.delete(args.path)
+
+    _report(
+        result,
+        engine=engine,
+        journal_path=args.journal,
+        session=session,
+        detail=f"target:  {result.path} -> {result.resolved}",
+    )
+    if result.error:
+        print(f"error:   {result.error}", file=sys.stderr)
+    return _exit_for(result)
+
+
+def _handle_fetch(args: argparse.Namespace) -> int:
+    engine = _resolve_engine(args.policy)
+    journal = Journal(args.journal)
+    workspace = _workspace_of(args)
+
+    with Session(engine, journal, cwd=str(Path.cwd()), workspace=str(workspace)) as session:
+        guard = GuardedNetwork(
+            engine,
+            journal,
+            allow_review=args.allow_review,
+            timeout=args.timeout,
+            max_bytes=args.max_bytes,
+        )
+        result = guard.fetch(args.url, method=args.method)
+
+    detail = f"url:     {result.url}"
+    if result.status == "fetched":
+        detail += (
+            f"\nhttp:    {result.status_code} {result.content_type or ''}"
+            f" ({result.bytes_received} bytes{', truncated' if result.truncated else ''})"
+        )
+        if result.location:
+            detail += f"\nlocation: {result.location} (not followed; fetch it explicitly)"
+    _report(result, engine=engine, journal_path=args.journal, session=session, detail=detail)
+    if result.error:
+        print(f"error:   {result.error}", file=sys.stderr)
+    if result.body:
+        sys.stdout.flush()
+        sys.stdout.buffer.write(result.body)
+        sys.stdout.buffer.flush()
+    return _exit_for(result, failed=(result.status_code or 0) >= 400)
+
+
+def _write_payload(args: argparse.Namespace) -> bytes:
+    """The bytes to write: from ``--content``, from a file, or from stdin."""
+    if args.content is not None:
+        return str(args.content).encode("utf-8")
+    if args.from_file is not None:
+        try:
+            return Path(args.from_file).read_bytes()
+        except OSError as exc:
+            raise SentinelError(f"cannot read --from-file {args.from_file}: {exc}") from exc
+    return bytes(sys.stdin.buffer.read())
 
 
 def _handle_approve(args: argparse.Namespace) -> int:

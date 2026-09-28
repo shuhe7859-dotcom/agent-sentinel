@@ -1,0 +1,71 @@
+# A policy for working inside one repository, with a narrow network allow-list.
+#
+# Try it:
+#   sentinel write --policy examples/policies/workspace.toml --workspace . notes.md --content hi
+#   sentinel fetch --policy examples/policies/workspace.toml https://pypi.org/simple/
+#
+# Two ideas are worth copying from this file.
+#
+# 1. The file rules allow *any* path, and that is not as loose as it looks: the
+#    filesystem guard refuses anything that resolves outside the workspace
+#    before the policy is even consulted, and no policy can talk it out of that.
+#    This is the division of labour between a policy (what is sensible) and a
+#    guard (what is structurally safe).
+#
+# 2. The network rules invert the built-in default. `standard` reviews every
+#    destination; here the handful of hosts a build is expected to reach are
+#    allowed outright, and everything else is still reviewed.
+
+schema      = 1
+name        = "workspace"
+description = "A narrow allow-list for one repository; anything else is reviewed."
+default     = "review"
+
+# -- what is always fine ------------------------------------------------------
+
+[[rules]]
+id       = "shell.quality-tooling"
+kind     = "shell"
+effect   = "allow"
+priority = 10
+pattern  = '''(?i)\b(?:pytest|ruff|mypy|git\s+(?:status|diff|log|show))\b'''
+reason   = "the local test tooling and read-only git commands change nothing"
+tags     = ["quality", "git"]
+
+[[rules]]
+id       = "fs.write-in-workspace"
+kind     = "file.write"
+effect   = "allow"
+priority = 10
+pattern  = '''(?s).*'''
+reason   = "any path is fine here; the guard still refuses anything outside the workspace"
+tags     = ["filesystem"]
+
+[[rules]]
+id       = "fs.delete-in-workspace"
+kind     = "file.delete"
+effect   = "allow"
+priority = 10
+pattern  = '''(?s).*'''
+reason   = "as above; removing a directory is refused by the guard itself, not by a pattern"
+tags     = ["filesystem"]
+
+# -- the network allow-list ---------------------------------------------------
+
+[[rules]]
+id       = "network.allow-package-hosts"
+kind     = "network"
+effect   = "allow"
+priority = 20
+pattern  = '''(?i)^(?:pypi\.org|files\.pythonhosted\.org|registry\.npmjs\.org|github\.com|codeload\.github\.com|raw\.githubusercontent\.com)(?::\d+)?$'''
+reason   = "registries and source hosts a build is expected to reach"
+tags     = ["network", "allow-list"]
+
+[[rules]]
+id       = "network.any"
+kind     = "network"
+effect   = "review"
+priority = 90
+pattern  = '''(?s).+'''
+reason   = "every other destination is reviewed by default"
+tags     = ["network"]

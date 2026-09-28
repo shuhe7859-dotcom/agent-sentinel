@@ -188,3 +188,30 @@ def test_the_team_fixture_behaves_as_its_comments_claim() -> None:
     assert engine.evaluate(Action(kind=shell, target="git log --oneline")).allowed
     assert engine.evaluate(Action(kind=shell, target="git push origin main")).denied
     assert engine.evaluate(Action(kind=shell, target="make deploy")).requires_review
+
+
+def test_every_example_policy_loads() -> None:
+    examples = sorted((PROJECT_ROOT / "examples" / "policies").glob("*.toml"))
+
+    assert examples, "expected at least one example policy"
+    for path in examples:
+        policy = load_policy(path)
+        assert policy.name
+        assert policy.rules or policy.default_effect is not None
+
+
+def test_the_workspace_example_judges_its_documented_cases() -> None:
+    """The example claims two things; hold it to them."""
+    engine = PolicyEngine(load_policy(PROJECT_ROOT / "examples" / "policies" / "workspace.toml"))
+
+    # 1. In-workspace file work is allowed; containment is the guard's job.
+    assert engine.evaluate(Action(kind=ActionKind.FILE_WRITE, target="src/app.py")).allowed
+    assert engine.evaluate(Action(kind=ActionKind.FILE_DELETE, target="build/tmp.txt")).allowed
+
+    # 2. The allow-listed hosts are allowed, everything else is reviewed.
+    assert engine.evaluate(Action(kind=ActionKind.NETWORK, target="pypi.org")).allowed
+    assert engine.evaluate(Action(kind=ActionKind.NETWORK, target="pypi.org:8443")).allowed
+    assert engine.evaluate(Action(kind=ActionKind.NETWORK, target="example.com")).requires_review
+
+    # Nothing outside the allow-list was loosened.
+    assert engine.evaluate(Action(kind=ActionKind.SHELL, target="make deploy")).requires_review

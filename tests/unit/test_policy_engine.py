@@ -150,3 +150,30 @@ def test_permissive_preset_still_blocks_the_catastrophic() -> None:
 
     assert engine.evaluate(_shell("rm -rf /")).denied
     assert engine.evaluate(_shell("git push --force origin main")).allowed
+
+
+# ------------------------------------------------- subjects the M2 guards produce
+def _action(kind: ActionKind, target: str) -> Action:
+    return Action(kind=kind, target=target)
+
+
+def test_presets_still_fit_the_subjects_the_guards_produce() -> None:
+    """M2 made file.write, file.delete and network reachable; the rules must fit."""
+    standard = PolicyEngine(load_preset("standard"))
+    strict = PolicyEngine(load_preset("strict"))
+    permissive = PolicyEngine(load_preset("permissive"))
+
+    # One rule covers both file kinds, so deleting git internals is denied too.
+    for engine in (standard, strict, permissive):
+        assert engine.evaluate(_action(ActionKind.FILE_DELETE, ".git/config")).denied
+        assert engine.evaluate(_action(ActionKind.FILE_DELETE, "../outside.txt")).denied
+
+    # The network subject is a host, with the port when it is not the default.
+    assert standard.evaluate(_action(ActionKind.NETWORK, "pypi.org")).requires_review
+    assert standard.evaluate(_action(ActionKind.NETWORK, "pypi.org:8443")).requires_review
+    assert strict.evaluate(_action(ActionKind.NETWORK, "pypi.org:8443")).requires_review
+
+    # Ordinary work inside a workspace stays allowed under the default preset.
+    assert standard.evaluate(_action(ActionKind.FILE_WRITE, "src/app.py")).allowed
+    assert standard.evaluate(_action(ActionKind.FILE_DELETE, "build/tmp.txt")).allowed
+    assert permissive.evaluate(_action(ActionKind.FILE_WRITE, "src/app.py")).allowed
