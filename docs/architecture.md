@@ -108,6 +108,9 @@ decision that authorises one execution of one action; see
 | `src/agent_sentinel/policy/engine.py` | Rule ordering, matching, verdict. |
 | `src/agent_sentinel/policy/presets.py` | The built-in `permissive`/`standard`/`strict` policies. |
 | `src/agent_sentinel/guards/shell.py` | `GuardedRunner`: the guarded execution path. |
+| `src/agent_sentinel/guards/base.py` | The flow all three guards share, and the approval rule. |
+| `src/agent_sentinel/guards/filesystem.py` | Writes and deletes inside one workspace root. |
+| `src/agent_sentinel/guards/network.py` | HTTP egress, matched by host, redirects not followed. |
 | `src/agent_sentinel/cli.py` | `sentinel` subcommands and exit codes. |
 | `src/agent_sentinel/errors.py` | Exception hierarchy. |
 
@@ -140,14 +143,14 @@ than a richer rule language.
 ## Extension points
 
 *New action kind.* Add a member to `ActionKind`, then add rules with that
-`kind`. Guards that actually intercept that surface are separate work — the
-policy layer already understands a `network` action today, but nothing yet
-produces one.
+`kind`, and write a guard that produces it. All four kinds the policy layer
+knows about now have a guard behind them.
 
-*New guard.* A guard is anything that (1) builds an `Action`, (2) asks the
-engine, (3) records the outcome via a `Journal`. `GuardedRunner` is the
-reference implementation; `guards/filesystem.py` and `guards/network.py` would
-follow the same four steps.
+*New guard.* Subclass `guards.base.Guard`, describe the action in a public
+method, and pass a `perform` callable to `self.guard(...)`. The flow —
+proposing, deciding, escalating, consuming an approval exactly once and writing
+the result — is already there; `guards/filesystem.py` is the shortest worked
+example.
 
 *New adapter.* An adapter does not need to know about policy or journals. It
 needs to route a proposal through a guard. The planned MCP server and framework
@@ -166,6 +169,12 @@ Implemented and covered by tests:
 * TOML policy loading, validation and rule matching;
 * the three presets;
 * guarded shell execution with propose/decide/run/record;
+* guarded filesystem writes and deletes, with containment against a workspace
+  root that no policy can relax;
+* guarded HTTP egress that makes the request itself, matches on the host, and
+  refuses to follow a redirect;
+* the shared guard flow, so approvals and single-use consumption exist once
+  rather than three times;
 * approvals as first-class records: action-scoped, single use, expirable, and
   readable back out of the journal;
 * sessions that record the policy identity and a fingerprint of its content;
@@ -175,7 +184,6 @@ Implemented and covered by tests:
 
 Designed but not built yet (see [`roadmap.md`](roadmap.md)):
 
-* guards for filesystem writes, deletes and network egress;
 * an interactive terminal reviewer for `sentinel run`;
 * `journal replay` and `journal export`;
 * adapters for agent frameworks and an MCP server;
@@ -186,6 +194,8 @@ Designed but not built yet (see [`roadmap.md`](roadmap.md)):
 | Concern | Enforced by |
 | --- | --- |
 | What may run | `policy/` |
+| That a path stays inside the workspace | `guards/filesystem.py`, before the policy |
+| That only `http`/`https` is fetched, and redirects are not followed | `guards/network.py`, before the policy |
 | What is written down | `journal/` |
 | Who authorised an escalation | `approvals.py`, recorded in the same chain |
 | Which policy was in force | `session.py` and `Policy.fingerprint()` |

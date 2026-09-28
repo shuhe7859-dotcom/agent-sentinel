@@ -64,13 +64,37 @@ an ISO-8601 UTC instant after which the grant stops counting. See
 
 ### `action.result` statuses
 
-| Status | Meaning | Extra fields |
-| --- | --- | --- |
-| `executed` | The command ran. | `returncode`, `duration_ms`, digests, byte counts, previews |
-| `timeout` | The command was killed at the deadline. | `timeout_s`, `duration_ms`, digests |
-| `denied` | Policy refused; nothing ran. | `rule`, `reason` |
-| `awaiting_approval` | Policy asked for review and nobody has answered. | `rule`, `reason` |
-| `refused` | A reviewer callback answered "no". | `rule`, `reason` |
+| Status | Guard | Meaning | Extra fields |
+| --- | --- | --- | --- |
+| `executed` | shell | The command ran. | `returncode`, `duration_ms`, stdout/stderr digests, byte counts, previews |
+| `timeout` | shell, network | Killed at the deadline, or gave up waiting. | `timeout_s`, `duration_ms`, digests |
+| `written` | filesystem | The file was written. | `bytes_written`, `sha256`, `duration_ms` |
+| `deleted` | filesystem | The file was removed. | `duration_ms` |
+| `fetched` | network | A response came back; read `status_code`. | `status_code`, `content_type`, `location`, `bytes_received`, `sha256`, `truncated` |
+| `denied` | all | Policy refused, or the guard did. | `rule`, `reason`, plus the guard's context |
+| `awaiting_approval` | all | Policy asked for review and nobody has answered. | `rule`, `reason` |
+| `refused` | all | A reviewer callback answered "no". | `rule`, `reason` |
+| `failed` | filesystem, network | The attempt raised an I/O or transport error. | `error`, plus the guard's context |
+
+Every guarded action's `action.result` also carries the context its guard
+contributes: a `policy.decision` and an `action.result` for a filesystem action
+both record `path`, `resolved` and `containment`, and both record `url` and
+`method` for a network action. The verdict and its outcome therefore read as one
+story without cross-referencing.
+
+### Content is recorded deliberately, per guard
+
+| Guard | What it writes to the journal |
+| --- | --- |
+| shell | Digest, byte count, **and a truncated preview** of stdout and stderr |
+| filesystem | Digest and byte count only — never the file's contents |
+| network | Status, content type, digest, byte count — never the response body |
+
+A command's output is transient and is the first thing anyone reaches for when
+reading a journal. A file or a response body is neither: it is persistent
+elsewhere, its digest is enough to prove identity, and it frequently contains
+secrets. A journal is meant to be shareable, so those two guards keep the
+contents for the caller instead.
 
 `approval_seq` is present whenever an approval authorised the execution. A
 `sentinel journal verify`-style reader can therefore tell, for every execution,

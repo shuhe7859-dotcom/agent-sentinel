@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-168%20passing-brightgreen.svg)](tests/)
 
 编码智能体会改动你的文件、执行你的命令、访问外部网络。由此引出两个问题，它们构成了
 这个项目的全部：
@@ -37,8 +37,8 @@ status:  awaiting_approval
 
 ## 当前状态
 
-早期但可用。记录格式、策略引擎、一个受控执行面（shell）以及审批闭环都已实现，
-并有 125 个测试覆盖。
+早期但可用。记录格式、策略引擎、三个受控执行面以及审批闭环都已实现，并有 168 个
+测试覆盖。
 
 | 模块 | 状态 |
 | --- | --- |
@@ -50,8 +50,9 @@ status:  awaiting_approval
 | 受控 shell 执行（提出、判定、执行、记录） | 已实现 |
 | 审批作为一等事件（限定单条动作、一次性、可过期） | 已实现 |
 | 会话记录当时生效的策略及其指纹 | 已实现 |
+| 受控文件写入与删除，限制在工作区根目录内 | 已实现 |
+| 受控 HTTP 出口，按主机名匹配，不跟随重定向 | 已实现 |
 | `sentinel` 命令行与稳定退出码 | 已实现 |
-| 文件系统与网络守卫 | 计划中（M2） |
 | 头哈希外部锚定与记录签名 | 计划中（M3） |
 | MCP Server、框架适配器、日志回放 | 计划中（M4） |
 
@@ -146,6 +147,37 @@ approval: granted by event #7
 策略里仍然写着 `review`：这次批准只授权了**一条**动作的**一次**执行，再跑一次会重新
 询问。完整规则见 [`docs/approvals.md`](docs/approvals.md)。
 
+### 文件和网络也同样受管控
+
+同一套策略管住三个面。其中两个面带有**任何策略都无法放宽**的结构性约束：文件路径
+必须解析在工作区内，URL 必须是 `http` 或 `https`。
+
+```console
+$ sentinel write --policy standard --journal .sentinel/session.jsonl --workspace . notes.md --content "hi"
+status:  written
+target:  notes.md -> /home/you/project/notes.md (2 bytes, sha256 0a1b2c3d4e5f)
+
+$ sentinel write --policy standard --journal .sentinel/session.jsonl --workspace . ../escape.md --content "hi"
+DENY   [standard] (policy default): '../escape.md' resolves to /home/you/escape.md,
+       outside the workspace '/home/you/project'; the filesystem guard does not
+       allow escapes (the policy had said allow)
+status:  denied
+$ echo $?
+3
+```
+
+网络规则匹配的是**主机名**，所以允许名单可以写得很干净：
+
+```console
+$ sentinel fetch --policy examples/policies/workspace.toml https://pypi.org/simple/
+status:  fetched
+url:     https://pypi.org/simple/
+http:    200 text/html; charset=utf-8 (21379 bytes)
+```
+
+请求由守卫**代为发起**——只报告判定结果的守卫很容易被绕开——同时**不跟随重定向**，
+所以下一跳会作为一条全新的动作重新过策略。详见 [`docs/guards.md`](docs/guards.md)。
+
 ## 作为库使用
 
 ```python
@@ -223,6 +255,9 @@ reason   = "发布在本仓库是人的决定"
 | `sentinel policy presets` | 列出内置策略 |
 | `sentinel policy check --policy P --kind K --target T [--json]` | 只判定一个动作，不执行 |
 | `sentinel run --policy P --journal J [--cwd D] [--timeout S] [--allow-review] -- CMD…` | 通过护栏执行命令并记录 |
+| `sentinel write --policy P --journal J [--workspace W] [--create-parents] PATH [--content T \| --from-file F]` | 在工作区内写文件；不给内容则从标准输入读取 |
+| `sentinel delete --policy P --journal J [--workspace W] PATH` | 删除工作区内的单个文件 |
+| `sentinel fetch --policy P --journal J [--method M] [--timeout S] [--max-bytes N] URL` | 取回一个 URL；请求由守卫发起，响应体输出到标准输出 |
 | `sentinel approve J --request-seq N [--expires-in MIN] [--note T] [--refuse]` | 为被升级的动作记录人工答复 |
 | `sentinel journal show J [--limit N] [--json]` | 打印已记录的事件 |
 | `sentinel journal pending J` | 列出仍需要人工处理的升级 |
@@ -240,7 +275,7 @@ reason   = "发布在本仓库是人的决定"
 | `1` | sentinel 自身出错（策略有问题、日志损坏） |
 | `2` | 该动作需要人工审核，未执行 |
 | `3` | 被策略拒绝 |
-| `4` | 受控命令执行了，但返回非零 |
+| `4` | 动作执行了但失败：命令返回非零、发生 I/O 错误、HTTP 状态码 ≥ 400、或超时 |
 
 ## 仓库结构
 
@@ -259,7 +294,10 @@ agent-sentinel/
 │   │   ├── engine.py        排序、匹配、判定
 │   │   └── presets.py       permissive / standard / strict
 │   └── guards/
-│       └── shell.py         GuardedRunner：提出、判定、执行、记录
+│       ├── base.py          三个守卫共用的流程
+│       ├── shell.py         GuardedShell：执行命令行
+│       ├── filesystem.py    GuardedFileSystem：受控写入与删除
+│       └── network.py       GuardedNetwork：按主机名管控的 HTTP
 ├── tests/
 │   ├── unit/                事件、日志、策略
 │   ├── integration/         命令行端到端
@@ -271,6 +309,7 @@ agent-sentinel/
 │   ├── architecture.md      分层、数据流、扩展点
 │   ├── policy-reference.md  策略可用的全部键
 │   ├── approvals.md         人工批准如何变成证据
+│   ├── guards.md            三个执行面，以及每个守卫会拒绝什么
 │   ├── event-schema.md      落盘记录格式
 │   ├── threat-model.md      防御什么、不防御什么
 │   ├── roadmap.md           里程碑
@@ -304,6 +343,7 @@ agent-sentinel **不是沙箱**。它决定是否启动一个进程，但不隔�
 | [`docs/architecture.md`](docs/architecture.md) | 想了解各部分如何拼在一起，或要在哪里加守卫 |
 | [`docs/policy-reference.md`](docs/policy-reference.md) | 正在编写或评审策略 |
 | [`docs/approvals.md`](docs/approvals.md) | 正在决定人工该如何答复一次升级 |
+| [`docs/guards.md`](docs/guards.md) | 正在接入某个守卫，或想知道某次写入为什么被拒 |
 | [`docs/event-schema.md`](docs/event-schema.md) | 想脱离本库读日志，或要改动记录格式 |
 | [`docs/threat-model.md`](docs/threat-model.md) | 需要知道哪些在范围内、哪些不在 |
 | [`docs/development.md`](docs/development.md) | 正在搭环境、贡献代码或准备发版 |

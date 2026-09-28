@@ -36,6 +36,9 @@ at this, and it is the part of the project that has to be right.
 * Stopping at `review` until a human or a configured reviewer callback approves.
 * Recording the proposal, the verdict and the observed outcome of every guarded
   action.
+* Keeping file writes and deletes inside a declared workspace, and HTTP egress
+  on `http` and `https`, whatever a policy happens to say — a guard can tighten
+  a verdict but never loosen it.
 * Detecting that a journal was edited, truncated, reordered or spliced after the
   fact.
 * Being readable and reviewable: a policy is a diffable file, the log is text.
@@ -84,10 +87,13 @@ does real work.
 | --- | --- | --- |
 | Destructive command (`rm -rf /`, `mkfs`, `dd` to `/dev/`) | `deny` rules in every preset | A novel spelling the pattern misses |
 | Remote code execution by convention (`curl … \| sh`) | `deny` rule | Obfuscated equivalents |
-| Path escape via `..` | `deny` for `file.write` / `file.delete` | No filesystem guard exists yet, so nothing produces those actions in practice |
-| Editing `.git` internals | `deny` rule | Same caveat as above |
+| Path escape via `..`, an absolute path, or a symbolic link | Resolved and compared against the workspace root by the filesystem guard; no policy can relax it | Time-of-check to time-of-use: a path component swapped for a link between the check and the write |
+| Editing `.git` internals | `deny` rule on `file.write` / `file.delete` | Only applies to writes made through the guard |
 | Force push / history rewrite | `review` | A human who rubber-stamps |
-| Credential access or exfiltration | `review` rules plus a default `review` for network actions | No network guard exists yet, so nothing produces `network` actions in practice |
+| Credential access or exfiltration | `review` rules, plus a default `review` for every network destination | Rules match text and hosts, not intent |
+| Exfiltration by `file://` URL | The network guard refuses every scheme but `http` and `https`, before the policy is consulted | Direct filesystem reads outside the guard are not covered |
+| An allow-listed host redirecting somewhere else | Redirects are not followed; the 3xx and its `Location` are recorded, and the next hop is a fresh action | The caller has to notice the 3xx and re-fetch deliberately |
+| A secret leaking through the journal | File contents and response bodies are never recorded, only digests and byte counts | Command output *is* recorded as a preview, because that is the evidence of what a command did |
 | Silently editing a journal record | Per-record digest | Attacker who rewrites the entire file |
 | Truncating a journal | `sequence` and `link` checks | Truncating the *tail* is indistinguishable from a shorter session unless the head hash was anchored |
 | Denial of service by a runaway command | `--timeout` kills the process and records `timeout` | Resource limits are the operating system's job |
@@ -113,4 +119,3 @@ The design preference is to fail loudly and conservatively:
 
 See [`SECURITY.md`](../SECURITY.md). Please do not open a public issue for a
 bypass.
-

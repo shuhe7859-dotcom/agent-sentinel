@@ -31,15 +31,21 @@ same hash chain, scoped to one action, and spent when it is used.
 - [x] Approvals that expire, and that are scoped to one action rather than one rule
 - [ ] An interactive terminal reviewer (`sentinel run --interactive`)
 
-## M2 — Guards for the other three surfaces
+## M2 — Guards for the other three surfaces ✅
 
-The policy layer already understands `file.write`, `file.delete` and `network`.
-Nothing produces those actions yet, which makes those rules decorative.
+All four action kinds now have a guard behind them, and the two that can be
+constrained structurally are.
 
-- [ ] `guards/filesystem.py`: path containment inside the workspace, recording writes and deletes
-- [ ] `guards/network.py`: destination allow-list, recorded egress
-- [ ] A workspace "root" concept, so `..` is judged against it rather than by text alone
-- [ ] Preset rules re-verified against the real subjects the new guards produce
+- [x] `guards/filesystem.py`: writes and deletes inside the workspace, with the
+      resolved path recorded and a digest instead of the contents
+- [x] `guards/network.py`: the guard makes the request, so the host allow-list is
+      enforced rather than suggested
+- [x] A workspace root given at runtime, so `..` and absolute paths are judged by
+      resolving them rather than by matching text
+- [x] Preset rules re-verified against the real subjects the new guards produce
+- [x] The flow shared by all three guards extracted into `guards/base.py`
+- [x] 168 tests, of which two symbolic-link cases are skipped where the platform
+      will not create them
 
 ## M3 — Make the log hard to lie about
 

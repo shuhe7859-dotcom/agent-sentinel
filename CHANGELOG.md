@@ -27,18 +27,49 @@ are still treated as breaking, because journals outlive code.
   content fingerprint, so a journal can be tied to the exact rules that were in
   force. `Session` is available as a context manager for embedders, and
   `Policy.fingerprint()` / `Action.fingerprint()` are public.
-- **A third `action.result` status, `refused`**, for when a reviewer callback
-  answers no, and an `approval_seq` field on executed results.
-- **`GuardedRunner(reviewer=...)` and `allow_review` are documented and tested.**
-  Both record who answered, and `approval.decided` carries a `source` of
-  `operator`, `callback` or `config`.
+- **A `refused` status**, for when a reviewer callback answers no, and an
+  `approval_seq` field on executed results.
+- **`reviewer` callbacks and `allow_review` documented and tested.** Both record
+  who answered, and `approval.decided` carries a `source` of `operator`,
+  `callback` or `config`.
 - **`docs/approvals.md`**, a full account of the approval model and its limits.
+- **Guarded filesystem access.** `GuardedFileSystem.write()` and `.delete()`
+  work inside one workspace root, given at runtime. The target is resolved with
+  `Path.resolve()`, so `..`, an absolute path and a symbolic link that points
+  outside are all refused *before* the policy is consulted, and no policy can
+  relax that. The journal records the path as written, the resolved path, the
+  workspace-relative path and a digest — never the file's contents.
+- **Guarded HTTP egress.** `GuardedNetwork.fetch()` makes the request itself, so
+  an allow-list is enforced rather than suggested. Rules match the host
+  (lower-cased, with `:port` when it is not the scheme's default); only `http`
+  and `https` are fetched; redirects are not followed, so the next hop goes
+  through the policy as a fresh action; response bodies go to the caller and not
+  into the journal.
+- **`sentinel write`, `sentinel delete` and `sentinel fetch`**, each writing a
+  session frame and recording what they did. `--workspace` defaults to the
+  current directory and is recorded in `session.start`; `sentinel run` gained the
+  same flag so every command records it.
+- **`guards/base.py`**, the propose → decide → escalate → act → record flow that
+  all three guards share, so the single-use approval rule exists in one place.
+- **`docs/guards.md`**, and `examples/policies/workspace.toml` showing a host
+  allow-list next to file rules that lean on the guard for containment.
 
 ### Changed
 
 - `GuardedResult` gained `approval_seq` and `approval_request`.
 - The version string moved to `agent_sentinel/_version.py` so that modules
   imported by the package root can read it without a circular import.
+- `GuardedRunner` is now `GuardedShell`, with `GuardedRunner` kept as an alias.
+  `GuardedResult`, `GuardResult` and the existing fields are unchanged.
+- An `OSError` while carrying an action out is now recorded as a `failed` result
+  for every guard. The shell guard used to raise `GuardError`.
+- `Session` takes a `workspace`, recorded in `session.start`.
+
+### Fixed
+
+- `sentinel run` exited `0` when a command hit its timeout, because the exit code
+  was read from `returncode`, which is `None` in that case. A timeout now exits
+  `4`, like any other attempt that failed.
 
 ### Known limitations
 
@@ -46,6 +77,12 @@ are still treated as breaking, because journals outlive code.
   next attempt.
 - Approvals are not authenticated. Anyone who can write the journal can append a
   grant, and the chain will still verify, because it is a valid record.
+- Deleting a symbolic link is refused rather than guessed at, and directory
+  deletion is out of scope for the filesystem guard; both go through the shell
+  guard, where the command is recorded instead.
+- Containment is checked and then used, so a path component swapped for a link
+  in between is not caught. Closing that needs `openat`-style primitives the
+  standard library does not expose portably.
 
 ## [0.1.0] - 2026-09-21
 

@@ -8,7 +8,7 @@ English | [简体中文](README.zh-CN.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/tests-125%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-168%20passing-brightgreen.svg)](tests/)
 
 A coding agent edits your files, runs your commands and talks to the network.
 Two questions follow, and together they are the whole project:
@@ -39,8 +39,8 @@ an actual action.
 
 ## Status
 
-Early, but working. The record format, the policy engine, one guarded surface
-(shell) and the approval loop are implemented and covered by 125 tests.
+Early, but working. The record format, the policy engine, all three guarded
+surfaces and the approval loop are implemented and covered by 168 tests.
 
 | Area | State |
 | --- | --- |
@@ -52,8 +52,9 @@ Early, but working. The record format, the policy engine, one guarded surface
 | Guarded shell execution (propose, decide, run, record) | implemented |
 | Approvals as first-class, single-use, expirable records | implemented |
 | Sessions that record which policy was in force | implemented |
+| Guarded file writes and deletes, contained to a workspace root | implemented |
+| Guarded HTTP egress, matched by host, redirects not followed | implemented |
 | `sentinel` CLI with stable exit codes | implemented |
-| Guards for filesystem and network | planned (M2) |
 | Head-hash anchoring and record signing | planned (M3) |
 | MCP server, framework adapters, journal replay | planned (M4) |
 
@@ -152,6 +153,39 @@ The policy still says `review` — the approval authorised one execution of one
 action, and running it again asks again. Read
 [`docs/approvals.md`](docs/approvals.md) for the rules.
 
+### Guard files and the network too
+
+The same policy governs three surfaces. Two of them carry a structural rule
+that no policy can relax: a file path must resolve inside the workspace, and a
+URL must be `http` or `https`.
+
+```console
+$ sentinel write --policy standard --journal .sentinel/session.jsonl --workspace . notes.md --content "hi"
+status:  written
+target:  notes.md -> /home/you/project/notes.md (2 bytes, sha256 0a1b2c3d4e5f)
+
+$ sentinel write --policy standard --journal .sentinel/session.jsonl --workspace . ../escape.md --content "hi"
+DENY   [standard] (policy default): '../escape.md' resolves to /home/you/escape.md,
+       outside the workspace '/home/you/project'; the filesystem guard does not
+       allow escapes (the policy had said allow)
+status:  denied
+$ echo $?
+3
+```
+
+Network rules match the **host**, so an allow-list stays readable:
+
+```console
+$ sentinel fetch --policy examples/policies/workspace.toml https://pypi.org/simple/
+status:  fetched
+url:     https://pypi.org/simple/
+http:    200 text/html; charset=utf-8 (21379 bytes)
+```
+
+The guard makes the request itself — a guard that only reported a verdict would
+be easy to walk around — and a redirect is not followed, so the next hop goes
+through the policy as a fresh action. Read [`docs/guards.md`](docs/guards.md).
+
 ## Using the library
 
 ```python
@@ -231,6 +265,9 @@ project-specific policy is to copy it and narrow it.
 | `sentinel policy presets` | List the built-in policies. |
 | `sentinel policy check --policy P --kind K --target T [--json]` | Evaluate one action; run nothing. |
 | `sentinel run --policy P --journal J [--cwd D] [--timeout S] [--allow-review] -- CMD…` | Run a command through the guardrail and record it. |
+| `sentinel write --policy P --journal J [--workspace W] [--create-parents] PATH [--content T \| --from-file F]` | Write a file inside the workspace; reads stdin when no content is given. |
+| `sentinel delete --policy P --journal J [--workspace W] PATH` | Remove a single file inside the workspace. |
+| `sentinel fetch --policy P --journal J [--method M] [--timeout S] [--max-bytes N] URL` | Fetch a URL; the guard makes the request and the body goes to stdout. |
 | `sentinel approve J --request-seq N [--expires-in MIN] [--note T] [--refuse]` | Record a human answer for an escalated action. |
 | `sentinel journal show J [--limit N] [--json]` | Print recorded events. |
 | `sentinel journal pending J` | List escalations that still need a human. |
@@ -248,7 +285,7 @@ Exit codes are stable, so `sentinel` can be used from scripts:
 | `1` | sentinel itself failed (bad policy, damaged journal) |
 | `2` | the action needs review and was not run |
 | `3` | the action was denied by policy |
-| `4` | a guarded command ran and returned non-zero |
+| `4` | the action ran and failed: a command returned non-zero, an I/O error occurred, an HTTP status of 400 or above came back, or something timed out |
 
 ## Repository layout
 
@@ -267,7 +304,10 @@ agent-sentinel/
 │   │   ├── engine.py        ordering, matching, verdict
 │   │   └── presets.py       permissive / standard / strict
 │   └── guards/
-│       └── shell.py         GuardedRunner: propose, decide, run, record
+│       ├── base.py          the flow all three guards share
+│       ├── shell.py         GuardedShell: run a command line
+│       ├── filesystem.py    GuardedFileSystem: writes and deletes, contained
+│       └── network.py       GuardedNetwork: HTTP, matched by host
 ├── tests/
 │   ├── unit/                events, journal, policy
 │   ├── integration/         the CLI end to end
@@ -279,6 +319,7 @@ agent-sentinel/
 │   ├── architecture.md      layers, data flow, extension points
 │   ├── policy-reference.md  every key a policy can use
 │   ├── approvals.md         how a human "yes" becomes evidence
+│   ├── guards.md            the three surfaces and what each one refuses
 │   ├── event-schema.md      the on-disk record format
 │   ├── threat-model.md      what this defends against, and what it does not
 │   ├── roadmap.md           milestones
@@ -313,6 +354,7 @@ are written out in [`docs/threat-model.md`](docs/threat-model.md).
 | [`docs/architecture.md`](docs/architecture.md) | You want to know how the pieces fit, or where to add a guard. |
 | [`docs/policy-reference.md`](docs/policy-reference.md) | You are writing or reviewing a policy. |
 | [`docs/approvals.md`](docs/approvals.md) | You are deciding how a human should answer an escalation. |
+| [`docs/guards.md`](docs/guards.md) | You are embedding a guard, or wondering why a write was refused. |
 | [`docs/event-schema.md`](docs/event-schema.md) | You want to read a journal without this library, or change the format. |
 | [`docs/threat-model.md`](docs/threat-model.md) | You need to know what is in scope, and what is not. |
 | [`docs/development.md`](docs/development.md) | You are setting up, contributing, or releasing. |

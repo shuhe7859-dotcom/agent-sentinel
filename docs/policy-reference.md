@@ -47,12 +47,29 @@ behaviour is noise in a log; if something deserves attention, it deserves
 
 ## Action kinds
 
-| Kind | Subject is | Example target |
+| Kind | Subject is | Example subject |
 | --- | --- | --- |
 | `shell` | The command line. | `git push --force origin main` |
-| `file.write` | The destination path. | `src/agent_sentinel/cli.py` |
-| `file.delete` | The path being removed. | `build/` |
-| `network` | The host or URL. | `pypi.org` |
+| `file.write` | The destination path as the caller wrote it. | `src/agent_sentinel/cli.py`, `../outside.py` |
+| `file.delete` | The path being removed. | `notes/todo.md` |
+| `network` | The **host**, lower-cased, with `:port` when the port is not the scheme's default. | `pypi.org`, `pypi.org:8443`, `127.0.0.1:8080` |
+
+The subjects above are what the guards actually produce, so the rules in the
+presets match the real thing rather than an approximation. See
+[`guards.md`](guards.md) for what each guard does with the verdict.
+
+### Guard and policy, between them
+
+A guard may tighten a verdict and never loosen it. Two consequences show up in
+practice:
+
+* a `file.write` rule that allows everything means "any path **inside the
+  workspace**", because the filesystem guard refuses escapes first;
+* a `network` rule never sees a `file://` URL, because the network guard refuses
+  every scheme but `http` and `https` before the policy is consulted.
+
+Both are recorded: the decision's `reason` says what the policy had wanted, and
+the payload carries `containment` (filesystem) or `constraint` (network).
 
 ## Ordering and precedence
 
@@ -158,4 +175,9 @@ compile.
   and retire the old one.
 * Patterns are not a sandbox. See [`threat-model.md`](threat-model.md) for what
   a policy cannot do.
-
+* For a `file.write` or `file.delete` rule, patterns match the path as written,
+  so `..` stays visible. Containment is enforced separately and structurally by
+  the guard; a `deny` rule on `\.\.` is a second net, not the main mechanism.
+* For a `network` rule, patterns match the host, not the URL. A rule cannot
+  allow `https://api.example.com` while refusing `http://api.example.com`;
+  restrict the host and let the transport be judged separately.
