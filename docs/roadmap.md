@@ -47,12 +47,24 @@ constrained structurally are.
 - [x] 168 tests, of which two symbolic-link cases are skipped where the platform
       will not create them
 
-## M3 — Make the log hard to lie about
+## M3 — Make the log hard to lie about ✅
 
-- [ ] Anchor the head hash outside the journal (CI log line, transparency log, or a
-      second machine) and record the anchor
-- [ ] Optional Ed25519 signing of each record, so a full rewrite by a third party is detectable
-- [ ] Detect tail truncation by comparing the journal head with the last anchored value
+The two holes the threat model used to admit to -- tail truncation and a full
+rewrite -- now have an answer, with the caveat that the answer is opt-in.
+
+- [x] `sentinel journal anchor` writes the head hash to an anchor file and hands
+      the same JSON to an external command, printing a summary line for the CI log
+- [x] `sentinel journal verify --anchors` catches a truncated tail (`truncated`)
+      and a replaced file (`rewritten`); every anchor is a checkpoint, so an
+      early one still catches a rewrite of the records before it
+- [x] Optional Ed25519 signing of anchors, behind an `agent-sentinel[sign]`
+      extra, with `--key` to pin the expected signer
+- [x] A missing or empty anchor file is an error rather than a pass, so deleting
+      the evidence is not the easiest attack
+- [x] `docs/anchoring.md`, and the record format left alone: anchors have their
+      own schema and the journal's `SCHEMA_VERSION` does not move
+- [x] 224 tests, of which two symbolic-link cases are skipped where the platform
+      will not create them
 
 ## M4 — Make it usable where agents actually run
 

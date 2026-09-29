@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/tests-168%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-224%20passing-brightgreen.svg)](tests/)
 
 编码智能体会改动你的文件、执行你的命令、访问外部网络。由此引出两个问题，它们构成了
 这个项目的全部：
@@ -37,8 +37,8 @@ status:  awaiting_approval
 
 ## 当前状态
 
-早期但可用。记录格式、策略引擎、三个受控执行面以及审批闭环都已实现，并有 168 个
-测试覆盖。
+早期但可用。记录格式、策略引擎、三个受控执行面、审批闭环以及防篡改工具都已实现，
+并有 224 个测试覆盖。
 
 | 模块 | 状态 |
 | --- | --- |
@@ -52,8 +52,9 @@ status:  awaiting_approval
 | 会话记录当时生效的策略及其指纹 | 已实现 |
 | 受控文件写入与删除，限制在工作区根目录内 | 已实现 |
 | 受控 HTTP 出口，按主机名匹配，不跟随重定向 | 已实现 |
+| 锚点：能发现尾部截断与整体重写 | 已实现 |
+| 可选的 Ed25519 锚点签名 | 已实现 |
 | `sentinel` 命令行与稳定退出码 | 已实现 |
-| 头哈希外部锚定与记录签名 | 计划中（M3） |
 | MCP Server、框架适配器、日志回放 | 计划中（M4） |
 
 里程碑清单见 [`docs/roadmap.md`](docs/roadmap.md)。
@@ -178,6 +179,33 @@ http:    200 text/html; charset=utf-8 (21379 bytes)
 请求由守卫**代为发起**——只报告判定结果的守卫很容易被绕开——同时**不跟随重定向**，
 所以下一跳会作为一条全新的动作重新过策略。详见 [`docs/guards.md`](docs/guards.md)。
 
+### 让日志难以说谎
+
+哈希链能发现"某条记录被改了"，但发现不了"结尾被删了几行"，也发现不了"整份文件被换成
+另一份合法的"。**锚点**——把头部哈希写到日志之外——可以：
+
+```console
+$ sentinel journal anchor .sentinel/session.jsonl \
+      --file .sentinel/anchors.jsonl --note "end of CI job"
+anchor  seq 42  head 5f2c602b66bba94b  journal session.jsonl  session b21629681de4
+
+$ sentinel journal verify .sentinel/session.jsonl --anchors .sentinel/anchors.jsonl
+anchors: 1 checked, latest at seq 42
+status:  ok - hash chain verified
+```
+
+把末尾删掉几行，锚点就会发现：
+
+```console
+$ sentinel journal verify .sentinel/session.jsonl --anchors .sentinel/anchors.jsonl
+status:  BROKEN - 1 issue(s)
+  - anchor (seq 42): truncated: anchored at seq 42, but the journal now ends at
+    seq 39: 3 records missing
+```
+
+**每一个锚点都是一道检查点**，所以早期记录被重写会被更早的锚点抓到。锚点还可以签名，
+这样没有私钥的第三方无法伪造——详见 [`docs/anchoring.md`](docs/anchoring.md)。
+
 ## 作为库使用
 
 ```python
@@ -261,8 +289,10 @@ reason   = "发布在本仓库是人的决定"
 | `sentinel approve J --request-seq N [--expires-in MIN] [--note T] [--refuse]` | 为被升级的动作记录人工答复 |
 | `sentinel journal show J [--limit N] [--json]` | 打印已记录的事件 |
 | `sentinel journal pending J` | 列出仍需要人工处理的升级 |
-| `sentinel journal verify J` | 校验哈希链 |
+| `sentinel journal verify J [--anchors A] [--key PUB]` | 校验哈希链，并可选择与锚点对照 |
 | `sentinel journal note J "text"` | 追加一条人工批注 |
+| `sentinel journal anchor J [--file A] [--command CMD] [--note T] [--sign-with KEY]` | 把头部哈希写到日志够不着的地方 |
+| `sentinel keygen [--private P] [--public P] [--force]` | 生成用于签名锚点的 Ed25519 密钥对 |
 | `sentinel version` | 打印版本 |
 
 `--policy` 既可以接受预设名，也可以接受一个 `.toml` 文件路径。
@@ -286,6 +316,8 @@ agent-sentinel/
 │   ├── journal.py           追加型文件、哈希链校验
 │   ├── approvals.py         人工答复：作用范围、一次性、有效期
 │   ├── session.py           会话开始/结束的记录框架
+│   ├── anchors.py           写到日志之外的头部哈希
+│   ├── signing.py           Ed25519 密钥与签名（可选依赖 sign）
 │   ├── errors.py            异常体系
 │   ├── cli.py               sentinel 命令
 │   ├── policy/
@@ -310,6 +342,7 @@ agent-sentinel/
 │   ├── policy-reference.md  策略可用的全部键
 │   ├── approvals.md         人工批准如何变成证据
 │   ├── guards.md            三个执行面，以及每个守卫会拒绝什么
+│   ├── anchoring.md         截断、重写，以及签名到底证明了什么
 │   ├── event-schema.md      落盘记录格式
 │   ├── threat-model.md      防御什么、不防御什么
 │   ├── roadmap.md           里程碑
@@ -344,6 +377,7 @@ agent-sentinel **不是沙箱**。它决定是否启动一个进程，但不隔�
 | [`docs/policy-reference.md`](docs/policy-reference.md) | 正在编写或评审策略 |
 | [`docs/approvals.md`](docs/approvals.md) | 正在决定人工该如何答复一次升级 |
 | [`docs/guards.md`](docs/guards.md) | 正在接入某个守卫，或想知道某次写入为什么被拒 |
+| [`docs/anchoring.md`](docs/anchoring.md) | 想确认日志没有被人悄悄删掉一段 |
 | [`docs/event-schema.md`](docs/event-schema.md) | 想脱离本库读日志，或要改动记录格式 |
 | [`docs/threat-model.md`](docs/threat-model.md) | 需要知道哪些在范围内、哪些不在 |
 | [`docs/development.md`](docs/development.md) | 正在搭环境、贡献代码或准备发版 |

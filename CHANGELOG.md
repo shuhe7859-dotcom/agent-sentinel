@@ -53,12 +53,34 @@ are still treated as breaking, because journals outlive code.
   all three guards share, so the single-use approval rule exists in one place.
 - **`docs/guards.md`**, and `examples/policies/workspace.toml` showing a host
   allow-list next to file rules that lean on the guard for containment.
+- **Anchors.** `sentinel journal anchor` writes the journal's head hash to an
+  anchor file and/or hands the same JSON to an external command, printing a
+  summary line for the CI log first so a later failure cannot hide it. Every
+  anchor is a checkpoint.
+- **Truncation and rewrite detection.** `sentinel journal verify --anchors`
+  reports `truncated` when an anchor points past the end of the journal and
+  `rewritten` when the record at an anchored position no longer matches. A
+  missing or empty anchor file is an error, not a pass, so deleting the evidence
+  is not the easiest attack.
+- **Optional Ed25519 signatures over anchors.** `sentinel keygen` writes a key
+  pair, `--sign-with` signs an anchor, and `--key` pins the expected signer,
+  reporting `bad-signature` or `key-mismatch`. It lives behind the
+  `agent-sentinel[sign]` extra, so the runtime core keeps importing nothing but
+  the standard library.
+- **`docs/anchoring.md`**, including an honest account of what anchoring cannot
+  do: evidence nobody expected can still be deleted, and an anchor kept next to
+  the journal does not stop someone with access to both.
 
 ### Changed
 
 - `GuardedResult` gained `approval_seq` and `approval_request`.
 - The version string moved to `agent_sentinel/_version.py` so that modules
   imported by the package root can read it without a circular import.
+- `IntegrityIssue` gained a `source` field (`journal` or `anchor`) so a rendered
+  problem says which file it is about.
+- `VerifyReport` gained `anchors_checked`, `latest_anchor_seq` and `signer`, all
+  defaulted, so existing construction and callers are unchanged.
+- `dev` now includes `cryptography`, so CI covers the signing path.
 - `GuardedRunner` is now `GuardedShell`, with `GuardedRunner` kept as an alias.
   `GuardedResult`, `GuardResult` and the existing fields are unchanged.
 - An `OSError` while carrying an action out is now recorded as a `failed` result
@@ -77,6 +99,10 @@ are still treated as breaking, because journals outlive code.
   next attempt.
 - Approvals are not authenticated. Anyone who can write the journal can append a
   grant, and the chain will still verify, because it is a valid record.
+- Anchoring is opt-in and only as external as the place you put the anchor. A
+  journal nobody anchored, or an anchor file nobody asks about, cannot be
+  checked. An unpinned signature proves very little, because the public key
+  travels inside the anchor.
 - Deleting a symbolic link is refused rather than guessed at, and directory
   deletion is out of scope for the filesystem guard; both go through the shell
   guard, where the command is recorded instead.

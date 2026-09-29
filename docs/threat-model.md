@@ -53,8 +53,9 @@ at this, and it is the part of the project that has to be right.
   constrained by anything here.
 * **Prevention of tampering.** The journal *detects* tampering; it does not
   prevent it. An attacker who can rewrite the whole file can produce a
-  consistent chain from scratch. Detecting that requires the head hash to be
-  anchored somewhere else — see the roadmap.
+  consistent chain from scratch. Detecting that needs the head hash written down
+  somewhere else, and even then only if you ask for it — see
+  [`anchoring.md`](anchoring.md).
 * **Malware analysis, dependency scanning, secret scanning at rest.** Different
   tools, different problems.
 * **Judging intent.** Patterns match text. `echo "rm -rf /"` and `rm -rf /` look
@@ -94,14 +95,17 @@ does real work.
 | Exfiltration by `file://` URL | The network guard refuses every scheme but `http` and `https`, before the policy is consulted | Direct filesystem reads outside the guard are not covered |
 | An allow-listed host redirecting somewhere else | Redirects are not followed; the 3xx and its `Location` are recorded, and the next hop is a fresh action | The caller has to notice the 3xx and re-fetch deliberately |
 | A secret leaking through the journal | File contents and response bodies are never recorded, only digests and byte counts | Command output *is* recorded as a preview, because that is the evidence of what a command did |
-| Silently editing a journal record | Per-record digest | Attacker who rewrites the entire file |
-| Truncating a journal | `sequence` and `link` checks | Truncating the *tail* is indistinguishable from a shorter session unless the head hash was anchored |
+| Silently editing a journal record | Per-record digest | An attacker who recomputes the whole chain produces an internally consistent file |
+| Truncating a journal | `sequence` and `link` checks | Truncating the *tail* looks exactly like a shorter session unless the head hash was anchored |
+| Rewriting the whole journal, or truncating its tail | `sentinel journal verify --anchors`: every anchor is a checkpoint, and a missing or empty anchor file is an error | An anchor kept next to the journal does not stop someone with access to both; publish it somewhere else. Evidence nobody asked about can still be deleted |
+| Forging an anchor | Ed25519 signature over the anchor, checked against a pinned public key | Signing is an optional extra, and an unpinned key only proves the anchor file was not edited by someone without the private key |
 | Denial of service by a runaway command | `--timeout` kills the process and records `timeout` | Resource limits are the operating system's job |
 
-Two entries above are worth repeating: **tail truncation is not currently
-detectable**, and **a full rewrite is not detectable**. Both are fixed by
-publishing the head hash outside the journal — to a CI log, a transparency log,
-or a teammate. That work is milestone M3 in [`roadmap.md`](roadmap.md).
+The two that used to be open — tail truncation and a full rewrite — now have an
+answer in [`anchoring.md`](anchoring.md). The honest caveat is that the answer
+is opt-in: an anchor only helps if one was taken, and it only helps if you ask
+about it, because absence of evidence you never expected is not something a
+verifier can notice.
 
 ## Failure behaviour
 

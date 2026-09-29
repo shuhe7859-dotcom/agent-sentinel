@@ -159,6 +159,13 @@ inflating the log while still letting you prove later that a given output
 matches the digest. Raise `DEFAULT_PREVIEW_CHARS` in
 `agent_sentinel/guards/shell.py` if a project needs more verbatim output.
 
+## Anchoring does not change any of this
+
+An anchor is a separate JSON Lines file with its own `schema`, recording a `seq`
+and the `hash` a journal had reached. The record format above does not move when
+you start anchoring, and `SCHEMA_VERSION` stays where it is. See
+[`anchoring.md`](anchoring.md) for that format, and for what it catches.
+
 ## Compatibility rules
 
 * Adding an optional field to `payload` is backwards compatible.

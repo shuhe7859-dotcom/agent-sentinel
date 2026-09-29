@@ -8,7 +8,7 @@ English | [简体中文](README.zh-CN.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/tests-168%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-224%20passing-brightgreen.svg)](tests/)
 
 A coding agent edits your files, runs your commands and talks to the network.
 Two questions follow, and together they are the whole project:
@@ -40,7 +40,8 @@ an actual action.
 ## Status
 
 Early, but working. The record format, the policy engine, all three guarded
-surfaces and the approval loop are implemented and covered by 168 tests.
+surfaces, the approval loop and the tamper-evidence toolkit are implemented and
+covered by 224 tests.
 
 | Area | State |
 | --- | --- |
@@ -54,8 +55,9 @@ surfaces and the approval loop are implemented and covered by 168 tests.
 | Sessions that record which policy was in force | implemented |
 | Guarded file writes and deletes, contained to a workspace root | implemented |
 | Guarded HTTP egress, matched by host, redirects not followed | implemented |
+| Anchors that catch a truncated tail and a replaced journal | implemented |
+| Optional Ed25519 signatures over anchors | implemented |
 | `sentinel` CLI with stable exit codes | implemented |
-| Head-hash anchoring and record signing | planned (M3) |
 | MCP server, framework adapters, journal replay | planned (M4) |
 
 See [`docs/roadmap.md`](docs/roadmap.md) for the milestone list.
@@ -186,6 +188,35 @@ The guard makes the request itself — a guard that only reported a verdict woul
 be easy to walk around — and a redirect is not followed, so the next hop goes
 through the policy as a fresh action. Read [`docs/guards.md`](docs/guards.md).
 
+### Make the log hard to lie about
+
+A hash chain catches an edited record. It cannot catch a journal whose last
+lines were deleted, or one replaced with a different but valid file. An
+**anchor** — the head hash, written down somewhere else — can:
+
+```console
+$ sentinel journal anchor .sentinel/session.jsonl \
+      --file .sentinel/anchors.jsonl --note "end of CI job"
+anchor  seq 42  head 5f2c602b66bba94b  journal session.jsonl  session b21629681de4
+
+$ sentinel journal verify .sentinel/session.jsonl --anchors .sentinel/anchors.jsonl
+anchors: 1 checked, latest at seq 42
+status:  ok - hash chain verified
+```
+
+Cut a few trailing records and the anchor notices:
+
+```console
+$ sentinel journal verify .sentinel/session.jsonl --anchors .sentinel/anchors.jsonl
+status:  BROKEN - 1 issue(s)
+  - anchor (seq 42): truncated: anchored at seq 42, but the journal now ends at
+    seq 39: 3 records missing
+```
+
+Every anchor is a checkpoint, so a rewrite of an early record is caught by an
+anchor taken before it. Anchors can be signed as well, so a third party without
+the private key cannot forge one — see [`docs/anchoring.md`](docs/anchoring.md).
+
 ## Using the library
 
 ```python
@@ -271,8 +302,10 @@ project-specific policy is to copy it and narrow it.
 | `sentinel approve J --request-seq N [--expires-in MIN] [--note T] [--refuse]` | Record a human answer for an escalated action. |
 | `sentinel journal show J [--limit N] [--json]` | Print recorded events. |
 | `sentinel journal pending J` | List escalations that still need a human. |
-| `sentinel journal verify J` | Verify the hash chain. |
+| `sentinel journal verify J [--anchors A] [--key PUB]` | Verify the hash chain, and optionally check it against anchors. |
 | `sentinel journal note J "text"` | Append a human annotation. |
+| `sentinel journal anchor J [--file A] [--command CMD] [--note T] [--sign-with KEY]` | Write the head hash somewhere the journal cannot reach. |
+| `sentinel keygen [--private P] [--public P] [--force]` | Generate an Ed25519 key pair for signing anchors. |
 | `sentinel version` | Print the version. |
 
 `--policy` accepts a preset name or a path to a `.toml` file.
@@ -296,6 +329,8 @@ agent-sentinel/
 │   ├── journal.py           append-only file, chain verification
 │   ├── approvals.py         human answers: scope, single use, expiry
 │   ├── session.py           session.start / session.end framing
+│   ├── anchors.py           head hashes written outside the journal
+│   ├── signing.py           Ed25519 key files and signatures (the sign extra)
 │   ├── errors.py            exception hierarchy
 │   ├── cli.py               the `sentinel` command
 │   ├── policy/
@@ -320,6 +355,7 @@ agent-sentinel/
 │   ├── policy-reference.md  every key a policy can use
 │   ├── approvals.md         how a human "yes" becomes evidence
 │   ├── guards.md            the three surfaces and what each one refuses
+│   ├── anchoring.md         truncation, rewrites, and what a signature proves
 │   ├── event-schema.md      the on-disk record format
 │   ├── threat-model.md      what this defends against, and what it does not
 │   ├── roadmap.md           milestones
@@ -355,6 +391,7 @@ are written out in [`docs/threat-model.md`](docs/threat-model.md).
 | [`docs/policy-reference.md`](docs/policy-reference.md) | You are writing or reviewing a policy. |
 | [`docs/approvals.md`](docs/approvals.md) | You are deciding how a human should answer an escalation. |
 | [`docs/guards.md`](docs/guards.md) | You are embedding a guard, or wondering why a write was refused. |
+| [`docs/anchoring.md`](docs/anchoring.md) | You want to know that nothing was quietly removed from a journal. |
 | [`docs/event-schema.md`](docs/event-schema.md) | You want to read a journal without this library, or change the format. |
 | [`docs/threat-model.md`](docs/threat-model.md) | You need to know what is in scope, and what is not. |
 | [`docs/development.md`](docs/development.md) | You are setting up, contributing, or releasing. |
