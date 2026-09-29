@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 from . import __version__
+from .anchors import Anchor, anchor_journal, append_anchor, verify_with_anchors
 from .approvals import (
     SOURCE_OPERATOR,
     approval_requests,
@@ -31,6 +33,7 @@ from .approvals import (
     record_decision,
 )
 from .errors import SentinelError
+from .events import canonical_dumps
 from .guards import (
     DEFAULT_MAX_BYTES,
     GuardedFileSystem,
@@ -44,6 +47,14 @@ from .policy.loader import load_policy
 from .policy.models import Action, ActionKind, Effect
 from .policy.presets import available_presets, load_preset
 from .session import Session
+from .signing import (
+    DEFAULT_KEY_DIR,
+    DEFAULT_PRIVATE_KEY,
+    DEFAULT_PUBLIC_KEY,
+    private_key_from_file,
+    public_key_from_file,
+    write_keypair,
+)
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -203,7 +214,46 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify = journal_sub.add_parser("verify", help="check the hash chain")
     verify.add_argument("path")
+    verify.add_argument(
+        "--anchors",
+        default=None,
+        metavar="PATH",
+        help="also check against an anchor file; a missing or empty file is an error",
+    )
+    verify.add_argument(
+        "--key",
+        default=None,
+        metavar="PATH",
+        help="the public key file every anchor must be signed by",
+    )
     verify.set_defaults(handler=_handle_journal_verify)
+
+    anchor = journal_sub.add_parser(
+        "anchor",
+        help="write the journal's current head somewhere the journal cannot reach",
+        epilog=(
+            "example: sentinel journal anchor .sentinel/session.jsonl "
+            "--file .sentinel/anchors.jsonl --note 'end of CI job'"
+        ),
+    )
+    anchor.add_argument("path")
+    anchor.add_argument(
+        "--file", default=None, metavar="PATH", help="append the anchor to this file"
+    )
+    anchor.add_argument(
+        "--command",
+        default=None,
+        metavar="CMD",
+        help="run this command with the anchor JSON on its standard input",
+    )
+    anchor.add_argument("--note", default="", help="why this anchor was taken")
+    anchor.add_argument(
+        "--sign-with",
+        default=None,
+        metavar="PATH",
+        help="private key file to sign the anchor with",
+    )
+    anchor.set_defaults(handler=_handle_journal_anchor)
 
     note = journal_sub.add_parser("note", help="append a human annotation")
     note.add_argument("path")
@@ -212,6 +262,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     version = subparsers.add_parser("version", help="print the version")
     version.set_defaults(handler=_handle_version)
+
+    keygen = subparsers.add_parser(
+        "keygen",
+        help="generate an Ed25519 key pair for signing anchors",
+        epilog="example: sentinel keygen --private .sentinel/keys/signing.key.json",
+    )
+    keygen.add_argument(
+        "--private",
+        default=None,
+        metavar="PATH",
+        help=f"where to write the private key (default: {DEFAULT_KEY_DIR / DEFAULT_PRIVATE_KEY})",
+    )
+    keygen.add_argument(
+        "--public",
+        default=None,
+        metavar="PATH",
+        help=f"where to write the public key (default: {DEFAULT_KEY_DIR / DEFAULT_PUBLIC_KEY})",
+    )
+    keygen.add_argument("--force", action="store_true", help="overwrite existing key files")
+    keygen.set_defaults(handler=_handle_keygen)
 
     return parser
 
@@ -288,6 +358,23 @@ def _exit_for(result: GuardResult, *, failed: bool = False) -> int:
 
 def _handle_version(args: argparse.Namespace) -> int:
     print(f"agent-sentinel {__version__}")
+    return EXIT_OK
+
+
+def _handle_keygen(args: argparse.Namespace) -> int:
+    private_path = Path(args.private) if args.private else DEFAULT_KEY_DIR / DEFAULT_PRIVATE_KEY
+    public_path = Path(args.public) if args.public else DEFAULT_KEY_DIR / DEFAULT_PUBLIC_KEY
+    pair = write_keypair(private_path, public_path, force=args.force)
+
+    print(f"private key: {pair.private_path}")
+    print(f"public key:  {pair.public_path}")
+    print(f"fingerprint: {pair.fingerprint}")
+    if not pair.permissions_enforced:
+        print(
+            "note: this platform does not restrict a file to its owner with chmod; "
+            "keep the private key where only you can read it, and share only the public one",
+            file=sys.stderr,
+        )
     return EXIT_OK
 
 
@@ -485,9 +572,54 @@ def _handle_journal_show(args: argparse.Namespace) -> int:
 
 
 def _handle_journal_verify(args: argparse.Namespace) -> int:
-    report = Journal(args.path).verify()
+    journal = Journal(args.path)
+    expected_key = public_key_from_file(args.key) if args.key else None
+    if args.anchors:
+        report = verify_with_anchors(journal, anchor_path=args.anchors, expected_key=expected_key)
+    elif expected_key is not None:
+        raise SentinelError(
+            "--key pins the signer of an anchor file, so it needs --anchors to check against"
+        )
+    else:
+        report = journal.verify()
     print(report.render())
     return EXIT_OK if report.ok else EXIT_ERROR
+
+
+def _handle_journal_anchor(args: argparse.Namespace) -> int:
+    journal = Journal(args.path)
+    private_key = private_key_from_file(args.sign_with) if args.sign_with else None
+    anchor = anchor_journal(journal, note=args.note, private_key=private_key)
+
+    # The summary goes out first: a CI log that captured it still has the
+    # evidence even if the command below fails.
+    print(anchor.render())
+    if args.file:
+        append_anchor(args.file, anchor)
+        print(f"appended to {args.file}", file=sys.stderr)
+
+    if args.command:
+        code = _run_anchor_command(args.command, anchor)
+        if code:
+            destination = args.file or "the printed line above"
+            print(
+                f"sentinel: the anchor command exited {code}; {destination} was still written",
+                file=sys.stderr,
+            )
+            return EXIT_COMMAND_FAILED
+    return EXIT_OK
+
+
+def _run_anchor_command(command: str, anchor: Anchor) -> int:
+    """Hand the anchor to a program on stdin, the way a CI log would receive it."""
+    payload = canonical_dumps(anchor.as_dict()).encode("utf-8")
+    try:
+        completed = subprocess.run(  # noqa: S602 - the operator supplies the command
+            command, shell=True, input=payload, check=False
+        )
+    except OSError as exc:
+        raise SentinelError(f"cannot run the anchor command {command!r}: {exc}") from exc
+    return completed.returncode
 
 
 def _handle_journal_note(args: argparse.Namespace) -> int:

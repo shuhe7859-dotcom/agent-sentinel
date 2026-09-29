@@ -604,3 +604,257 @@ def test_fetch_reports_an_error_status(
     assert code == cli.EXIT_COMMAND_FAILED
     assert captured.out == "nope"
     assert "404" in captured.err
+
+
+# ------------------------------------------------------------------- anchors
+def _noted_journal(tmp_path: Path, count: int = 2) -> Path:
+    """A journal with a few notes in it, ready to anchor."""
+    journal_path = tmp_path / "session.jsonl"
+    for index in range(count):
+        cli.main(["journal", "note", str(journal_path), f"note {index}"])
+    return journal_path
+
+
+def _keypair(tmp_path: Path, name: str = "signing") -> tuple[Path, Path]:
+    private = tmp_path / f"{name}.key.json"
+    public = tmp_path / f"{name}.pub.json"
+    cli.main(["keygen", "--private", str(private), "--public", str(public)])
+    return private, public
+
+
+def test_keygen_writes_a_pair_and_refuses_to_overwrite(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    private = tmp_path / "keys" / "signing.key.json"
+    public = tmp_path / "keys" / "signing.pub.json"
+
+    code = cli.main(["keygen", "--private", str(private), "--public", str(public)])
+    printed = capsys.readouterr()
+
+    assert code == cli.EXIT_OK
+    assert private.is_file()
+    assert public.is_file()
+    assert "fingerprint:" in printed.out
+
+    assert (
+        cli.main(["keygen", "--private", str(private), "--public", str(public)]) == cli.EXIT_ERROR
+    )
+    assert "refusing to overwrite" in capsys.readouterr().err
+
+
+def test_journal_anchor_prints_a_summary_and_writes_the_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _noted_journal(tmp_path)
+    anchors = tmp_path / "anchors.jsonl"
+    capsys.readouterr()
+
+    code = cli.main(
+        ["journal", "anchor", str(journal_path), "--file", str(anchors), "--note", "end of the run"]
+    )
+    printed = capsys.readouterr()
+
+    assert code == cli.EXIT_OK
+    assert printed.out.startswith("anchor  seq 2")
+    assert "appended to" in printed.err
+    record = json.loads(anchors.read_text(encoding="utf-8").strip())
+    assert record["schema"] == "1.0"
+    assert record["seq"] == 2
+    assert record["note"] == "end of the run"
+    assert record["journal"] == "session.jsonl"
+    assert record["signature"] is None
+
+
+def test_journal_verify_against_anchors(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    journal_path = _noted_journal(tmp_path, count=3)
+    anchors = tmp_path / "anchors.jsonl"
+    cli.main(["journal", "anchor", str(journal_path), "--file", str(anchors)])
+    capsys.readouterr()
+
+    assert (
+        cli.main(["journal", "verify", str(journal_path), "--anchors", str(anchors)]) == cli.EXIT_OK
+    )
+    assert "anchors: 1 checked, latest at seq 3" in capsys.readouterr().out
+
+    lines = journal_path.read_text(encoding="utf-8").splitlines()
+    journal_path.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+
+    code = cli.main(["journal", "verify", str(journal_path), "--anchors", str(anchors)])
+    printed = capsys.readouterr()
+
+    assert code == cli.EXIT_ERROR
+    assert "truncated" in printed.out
+    assert "anchor (seq 3)" in printed.out
+
+
+def test_a_signed_anchor_can_be_verified_and_pinned(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _noted_journal(tmp_path)
+    anchors = tmp_path / "signed.jsonl"
+    private, public = _keypair(tmp_path)
+    _, other_public = _keypair(tmp_path, name="other")
+    capsys.readouterr()
+
+    code = cli.main(
+        [
+            "journal",
+            "anchor",
+            str(journal_path),
+            "--file",
+            str(anchors),
+            "--sign-with",
+            str(private),
+        ]
+    )
+    assert code == cli.EXIT_OK
+    assert "signed by" in capsys.readouterr().out
+
+    code = cli.main(
+        ["journal", "verify", str(journal_path), "--anchors", str(anchors), "--key", str(public)]
+    )
+    assert code == cli.EXIT_OK
+    assert "signed by" in capsys.readouterr().out
+
+    code = cli.main(
+        [
+            "journal",
+            "verify",
+            str(journal_path),
+            "--anchors",
+            str(anchors),
+            "--key",
+            str(other_public),
+        ]
+    )
+    printed = capsys.readouterr()
+    assert code == cli.EXIT_ERROR
+    assert "key-mismatch" in printed.out
+
+
+def test_a_tampered_anchor_fails_its_signature(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _noted_journal(tmp_path)
+    anchors = tmp_path / "signed.jsonl"
+    private, public = _keypair(tmp_path)
+    capsys.readouterr()
+    cli.main(
+        [
+            "journal",
+            "anchor",
+            str(journal_path),
+            "--file",
+            str(anchors),
+            "--sign-with",
+            str(private),
+        ]
+    )
+    anchors.write_text(
+        anchors.read_text(encoding="utf-8").replace('"note":""', '"note":"tampered"'),
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    code = cli.main(
+        ["journal", "verify", str(journal_path), "--anchors", str(anchors), "--key", str(public)]
+    )
+
+    assert code == cli.EXIT_ERROR
+    assert "bad-signature" in capsys.readouterr().out
+
+
+def test_anchoring_an_empty_journal_is_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = cli.main(["journal", "anchor", str(tmp_path / "empty.jsonl")])
+
+    assert code == cli.EXIT_ERROR
+    assert "nothing to anchor" in capsys.readouterr().err
+
+
+def test_anchor_hands_the_json_to_an_external_command(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _noted_journal(tmp_path)
+    captured = tmp_path / "captured.json"
+    script = tmp_path / "capture.py"
+    script.write_text(
+        "import pathlib, sys\npathlib.Path(sys.argv[1]).write_bytes(sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    capsys.readouterr()
+
+    code = cli.main(
+        [
+            "journal",
+            "anchor",
+            str(journal_path),
+            "--command",
+            f'"{sys.executable}" "{script}" "{captured}"',
+        ]
+    )
+
+    assert code == cli.EXIT_OK
+    payload = json.loads(captured.read_text(encoding="utf-8"))
+    assert payload["seq"] == 2
+    assert payload["hash"] == Journal(journal_path).head().hash
+
+
+def test_a_failing_anchor_command_still_leaves_the_evidence(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _noted_journal(tmp_path)
+    anchors = tmp_path / "anchors.jsonl"
+    capsys.readouterr()
+
+    code = cli.main(
+        [
+            "journal",
+            "anchor",
+            str(journal_path),
+            "--file",
+            str(anchors),
+            "--command",
+            f'"{sys.executable}" -c "raise SystemExit(3)"',
+        ]
+    )
+    printed = capsys.readouterr()
+
+    assert code == cli.EXIT_COMMAND_FAILED
+    assert anchors.is_file()
+    assert "was still written" in printed.err
+    assert printed.out.startswith("anchor  seq 2")
+
+
+def test_pinning_a_key_without_anchors_is_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _noted_journal(tmp_path)
+    _, public = _keypair(tmp_path)
+    capsys.readouterr()
+
+    code = cli.main(["journal", "verify", str(journal_path), "--key", str(public)])
+
+    assert code == cli.EXIT_ERROR
+    assert "--anchors" in capsys.readouterr().err
+
+
+def test_a_missing_anchor_file_is_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _noted_journal(tmp_path)
+    capsys.readouterr()
+
+    code = cli.main(
+        [
+            "journal",
+            "verify",
+            str(journal_path),
+            "--anchors",
+            str(tmp_path / "absent.jsonl"),
+        ]
+    )
+
+    assert code == cli.EXIT_ERROR
+    assert "cannot read anchor file" in capsys.readouterr().err

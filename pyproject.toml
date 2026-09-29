@@ -40,7 +40,9 @@ dev = [
   "mypy>=1.15",
   "pre-commit>=4.0",
   "build>=1.2",
+  "cryptography>=43",
 ]
+sign = ["cryptography>=43"]
 
 [project.scripts]
 sentinel = "agent_sentinel.cli:main"

@@ -32,14 +32,18 @@ class IntegrityIssue:
     """A single problem found while verifying a journal."""
 
     kind: str
-    """One of ``malformed``, ``sequence``, ``link`` or ``hash``."""
+    """One of ``malformed``, ``sequence``, ``link`` or ``hash`` for the chain;
+    ``truncated``, ``rewritten``, ``bad-anchor``, ``bad-signature`` or
+    ``key-mismatch`` when an anchor file was supplied."""
 
     detail: str
     seq: int | None = None
     line: int | None = None
+    source: str = "journal"
+    """Which file the problem is in: ``journal`` or ``anchor``."""
 
     def render(self) -> str:
-        where = f"line {self.line}" if self.line is not None else "journal"
+        where = self.source if self.line is None else f"{self.source} line {self.line}"
         seq = f" (seq {self.seq})" if self.seq is not None else ""
         return f"{where}{seq}: {self.kind}: {self.detail}"
 
@@ -52,6 +56,12 @@ class VerifyReport:
     event_count: int
     head_hash: str | None
     issues: tuple[IntegrityIssue, ...]
+    anchors_checked: int = 0
+    """How many anchors were compared, when an anchor file was supplied."""
+
+    latest_anchor_seq: int | None = None
+    signer: str | None = None
+    """Fingerprint of the key that signed the newest anchor, if any."""
 
     @property
     def ok(self) -> bool:
@@ -64,6 +74,13 @@ class VerifyReport:
             f"records: {self.event_count}",
             f"head:    {self.head_hash or '(empty)'}",
         ]
+        if self.anchors_checked:
+            anchor_line = f"anchors: {self.anchors_checked} checked"
+            if self.latest_anchor_seq is not None:
+                anchor_line += f", latest at seq {self.latest_anchor_seq}"
+            if self.signer:
+                anchor_line += f", signed by {self.signer}"
+            lines.append(anchor_line)
         if self.ok:
             lines.append("status:  ok - hash chain verified")
         else:

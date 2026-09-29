@@ -10,6 +10,17 @@ The package is built around two ideas:
 from __future__ import annotations
 
 from ._version import __version__
+from .anchors import (
+    ANCHOR_SCHEMA_VERSION,
+    Anchor,
+    AnchorFile,
+    anchor_journal,
+    append_anchor,
+    compare_anchors,
+    read_anchor_file,
+    sign_anchor,
+    verify_with_anchors,
+)
 from .approvals import (
     SOURCE_CALLBACK,
     SOURCE_CONFIG,
@@ -29,6 +40,7 @@ from .errors import (
     JournalIntegrityError,
     PolicyError,
     SentinelError,
+    SigningError,
 )
 from .events import GENESIS_HASH, Actor, Event, EventType
 from .guards import (
@@ -48,8 +60,17 @@ from .policy.loader import load_policy, parse_policy
 from .policy.models import Action, ActionKind, Decision, Effect, Policy, Rule
 from .policy.presets import PRESET_NAMES, available_presets, load_preset
 from .session import Session, SessionInfo
+from .signing import (
+    KeyPair,
+    Signature,
+    generate_keypair,
+    private_key_from_file,
+    public_key_from_file,
+    write_keypair,
+)
 
 __all__ = [
+    "ANCHOR_SCHEMA_VERSION",
     "GENESIS_HASH",
     "PRESET_NAMES",
     "SOURCE_CALLBACK",
@@ -58,6 +79,8 @@ __all__ = [
     "Action",
     "ActionKind",
     "Actor",
+    "Anchor",
+    "AnchorFile",
     "Approval",
     "ApprovalRequest",
     "ConfigError",
@@ -78,6 +101,7 @@ __all__ = [
     "Journal",
     "JournalError",
     "JournalIntegrityError",
+    "KeyPair",
     "NetworkResult",
     "Policy",
     "PolicyEngine",
@@ -86,17 +110,29 @@ __all__ = [
     "SentinelError",
     "Session",
     "SessionInfo",
+    "Signature",
+    "SigningError",
     "VerifyReport",
     "__version__",
+    "anchor_journal",
+    "append_anchor",
     "approvals",
     "available_presets",
+    "compare_anchors",
     "find_grant",
+    "generate_keypair",
     "load_policy",
     "load_preset",
     "parse_policy",
     "pending_requests",
+    "private_key_from_file",
+    "public_key_from_file",
+    "read_anchor_file",
     "read_events",
     "record_decision",
     "request_approval",
+    "sign_anchor",
     "verify_file",
+    "verify_with_anchors",
+    "write_keypair",
 ]

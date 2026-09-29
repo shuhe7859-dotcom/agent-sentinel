@@ -27,5 +27,9 @@ class JournalIntegrityError(JournalError):
     """A journal record is unreadable or the hash chain does not hold."""
 
 
+class SigningError(ConfigError):
+    """A key could not be read, or a signature could not be produced."""
+
+
 class GuardError(SentinelError):
     """A guarded action could not be prepared or executed."""
