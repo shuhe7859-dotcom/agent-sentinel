@@ -8,7 +8,7 @@ English | [简体中文](README.zh-CN.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/tests-224%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-231%20passing-brightgreen.svg)](tests/)
 
 A coding agent edits your files, runs your commands and talks to the network.
 Two questions follow, and together they are the whole project:
@@ -41,7 +41,7 @@ an actual action.
 
 Early, but working. The record format, the policy engine, all three guarded
 surfaces, the approval loop and the tamper-evidence toolkit are implemented and
-covered by 224 tests.
+covered by 231 tests.
 
 | Area | State |
 | --- | --- |
@@ -154,6 +154,18 @@ approval: granted by event #7
 The policy still says `review` — the approval authorised one execution of one
 action, and running it again asks again. Read
 [`docs/approvals.md`](docs/approvals.md) for the rules.
+
+If you are sitting at the terminal, `--interactive` asks instead of sending you
+away, and still records who answered:
+
+```console
+$ sentinel run --policy standard --journal .sentinel/session.jsonl --interactive -- echo .netrc
+shell.credential-access: reading credential material
+  run shell echo .netrc? [y/N] y
+```
+
+It refuses to run at all when standard input is not a terminal, because a prompt
+nobody can answer is either a hang or a silent decision.
 
 ### Guard files and the network too
 
@@ -295,10 +307,10 @@ project-specific policy is to copy it and narrow it.
 | --- | --- |
 | `sentinel policy presets` | List the built-in policies. |
 | `sentinel policy check --policy P --kind K --target T [--json]` | Evaluate one action; run nothing. |
-| `sentinel run --policy P --journal J [--cwd D] [--timeout S] [--allow-review] -- CMD…` | Run a command through the guardrail and record it. |
-| `sentinel write --policy P --journal J [--workspace W] [--create-parents] PATH [--content T \| --from-file F]` | Write a file inside the workspace; reads stdin when no content is given. |
-| `sentinel delete --policy P --journal J [--workspace W] PATH` | Remove a single file inside the workspace. |
-| `sentinel fetch --policy P --journal J [--method M] [--timeout S] [--max-bytes N] URL` | Fetch a URL; the guard makes the request and the body goes to stdout. |
+| `sentinel run --policy P --journal J [--cwd D] [--timeout S] [--allow-review \| --interactive] -- CMD…` | Run a command through the guardrail and record it. |
+| `sentinel write --policy P --journal J [--workspace W] [--create-parents] [--interactive] PATH [--content T \| --from-file F]` | Write a file inside the workspace; reads stdin when no content is given. |
+| `sentinel delete --policy P --journal J [--workspace W] [--interactive] PATH` | Remove a single file inside the workspace. |
+| `sentinel fetch --policy P --journal J [--method M] [--timeout S] [--max-bytes N] [--interactive] URL` | Fetch a URL; the guard makes the request and the body goes to stdout. |
 | `sentinel approve J --request-seq N [--expires-in MIN] [--note T] [--refuse]` | Record a human answer for an escalated action. |
 | `sentinel journal show J [--limit N] [--json]` | Print recorded events. |
 | `sentinel journal pending J` | List escalations that still need a human. |
@@ -309,6 +321,10 @@ project-specific policy is to copy it and narrow it.
 | `sentinel version` | Print the version. |
 
 `--policy` accepts a preset name or a path to a `.toml` file.
+
+`--allow-review` treats every escalation as granted and records that nobody was
+asked. `--interactive` asks on the terminal instead; the two cannot be
+combined.
 
 Exit codes are stable, so `sentinel` can be used from scripts:
 

@@ -137,6 +137,33 @@ The record that comes out carries `"source": "callback"`, so the journal
 distinguishes an answer given live from one given later with
 `sentinel approve` (`"source": "operator"`).
 
+### Or with `--interactive`
+
+`sentinel run`, `write`, `delete` and `fetch` all take `--interactive`, which
+wires that prompt up for you:
+
+```console
+$ sentinel run --policy standard --journal .sentinel/session.jsonl --interactive -- git push --force origin main
+shell.git-force-push: force pushing rewrites shared history
+  run shell git push --force origin main? [y/N] y
+```
+
+The prompt goes to **stderr**, because stdout may be carrying the guarded
+command's output, and anything other than `y` or `yes` — including an empty line
+— means no.
+
+**It refuses to guess without a terminal.** If standard input is not a TTY,
+`--interactive` exits `1` before touching the journal, and says to use
+`sentinel approve` instead. In a script or in CI there is nobody to answer, so a
+prompt there would mean either a run that hangs or a default that quietly
+decides whether a reviewed action may proceed. `--interactive` and
+`--allow-review` are mutually exclusive for the same reason: one asks, the other
+presumes.
+
+The answer is recorded exactly like any other callback — `source` is `callback`,
+the actor is `human` — except that the note reads `answered at the terminal`, so
+a reader can tell a live answer from a programmatic one.
+
 For unattended runs, `GuardedRunner(..., allow_review=True)` pre-approves
 everything the policy escalates. It records `"source": "config"` next to each
 one, so a reader can tell that nobody was actually asked. It is a deliberate,

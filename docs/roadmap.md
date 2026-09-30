@@ -29,7 +29,9 @@ same hash chain, scoped to one action, and spent when it is used.
 - [x] A `session.start` / `session.end` pair written by the CLI, with the policy
       identity and its digest in the payload
 - [x] Approvals that expire, and that are scoped to one action rather than one rule
-- [ ] An interactive terminal reviewer (`sentinel run --interactive`)
+- [x] An interactive terminal reviewer (`--interactive` on `run`, `write`,
+      `delete` and `fetch`), which refuses to run at all when stdin is not a
+      terminal rather than guessing
 
 ## M2 — Guards for the other three surfaces ✅
 

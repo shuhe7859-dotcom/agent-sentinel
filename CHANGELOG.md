@@ -70,6 +70,17 @@ are still treated as breaking, because journals outlive code.
 - **`docs/anchoring.md`**, including an honest account of what anchoring cannot
   do: evidence nobody expected can still be deleted, and an anchor kept next to
   the journal does not stop someone with access to both.
+- **`--interactive`** on `run`, `write`, `delete` and `fetch`: asks on the
+  terminal before running a reviewed action, prompts on stderr so stdout stays
+  the guarded command's, and treats anything but `y`/`yes` as no.
+- **It refuses to guess without a terminal.** With `--interactive` and a
+  non-TTY stdin, the command exits `1` before touching the journal and points at
+  `sentinel approve` instead of hanging or deciding for you. `--interactive`
+  and `--allow-review` are mutually exclusive, since one asks and the other
+  presumes.
+- **`GuardedFileSystem`, `GuardedNetwork`, `GuardedShell` and `Guard` take a
+  `reviewer_note`**, so a journal can tell a live answer from a programmatic
+  one. The CLI writes `answered at the terminal`.
 
 ### Changed
 

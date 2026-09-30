@@ -54,7 +54,7 @@ to publish somewhere else (see milestone M3).
 | Source | Meaning |
 | --- | --- |
 | `operator` | Someone ran `sentinel approve`. |
-| `callback` | A `reviewer` callback answered inside the run. |
+| `callback` | A `reviewer` callback answered inside the run. `note` says which kind: `answered at the terminal` for `--interactive`, the default text for one an embedder supplied. |
 | `config` | `allow_review` pre-approved the run. Nobody was asked. |
 
 `fingerprint` is a digest of the action's kind and its normalised command or

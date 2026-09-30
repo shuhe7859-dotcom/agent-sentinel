@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/tests-224%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-231%20passing-brightgreen.svg)](tests/)
 
 编码智能体会改动你的文件、执行你的命令、访问外部网络。由此引出两个问题，它们构成了
 这个项目的全部：
@@ -38,7 +38,7 @@ status:  awaiting_approval
 ## 当前状态
 
 早期但可用。记录格式、策略引擎、三个受控执行面、审批闭环以及防篡改工具都已实现，
-并有 224 个测试覆盖。
+并有 231 个测试覆盖。
 
 | 模块 | 状态 |
 | --- | --- |
@@ -147,6 +147,18 @@ approval: granted by event #7
 
 策略里仍然写着 `review`：这次批准只授权了**一条**动作的**一次**执行，再跑一次会重新
 询问。完整规则见 [`docs/approvals.md`](docs/approvals.md)。
+
+如果你人就坐在终端前，`--interactive` 会直接问你，而不是把你支开，并且照样记录是谁
+答复的：
+
+```console
+$ sentinel run --policy standard --journal .sentinel/session.jsonl --interactive -- echo .netrc
+shell.credential-access: reading credential material
+  run shell echo .netrc? [y/N] y
+```
+
+如果标准输入不是终端，它会直接拒绝运行——一个没人能回答的提示，要么是挂住，要么是
+替人做了决定。
 
 ### 文件和网络也同样受管控
 
@@ -282,10 +294,10 @@ reason   = "发布在本仓库是人的决定"
 | --- | --- |
 | `sentinel policy presets` | 列出内置策略 |
 | `sentinel policy check --policy P --kind K --target T [--json]` | 只判定一个动作，不执行 |
-| `sentinel run --policy P --journal J [--cwd D] [--timeout S] [--allow-review] -- CMD…` | 通过护栏执行命令并记录 |
-| `sentinel write --policy P --journal J [--workspace W] [--create-parents] PATH [--content T \| --from-file F]` | 在工作区内写文件；不给内容则从标准输入读取 |
-| `sentinel delete --policy P --journal J [--workspace W] PATH` | 删除工作区内的单个文件 |
-| `sentinel fetch --policy P --journal J [--method M] [--timeout S] [--max-bytes N] URL` | 取回一个 URL；请求由守卫发起，响应体输出到标准输出 |
+| `sentinel run --policy P --journal J [--cwd D] [--timeout S] [--allow-review \| --interactive] -- CMD…` | 通过护栏执行命令并记录 |
+| `sentinel write --policy P --journal J [--workspace W] [--create-parents] [--interactive] PATH [--content T \| --from-file F]` | 在工作区内写文件；不给内容则从标准输入读取 |
+| `sentinel delete --policy P --journal J [--workspace W] [--interactive] PATH` | 删除工作区内的单个文件 |
+| `sentinel fetch --policy P --journal J [--method M] [--timeout S] [--max-bytes N] [--interactive] URL` | 取回一个 URL；请求由守卫发起，响应体输出到标准输出 |
 | `sentinel approve J --request-seq N [--expires-in MIN] [--note T] [--refuse]` | 为被升级的动作记录人工答复 |
 | `sentinel journal show J [--limit N] [--json]` | 打印已记录的事件 |
 | `sentinel journal pending J` | 列出仍需要人工处理的升级 |
@@ -296,6 +308,9 @@ reason   = "发布在本仓库是人的决定"
 | `sentinel version` | 打印版本 |
 
 `--policy` 既可以接受预设名，也可以接受一个 `.toml` 文件路径。
+
+`--allow-review` 把每次升级都当作已批准，并如实记录"没有问过任何人"；`--interactive`
+则是在终端上发问。两者不能同时使用。
 
 退出码是稳定的，可以直接在脚本里使用：
 
