@@ -87,9 +87,16 @@ class GuardedShell(Guard[GuardedResult]):
         cwd: str | Path | None = None,
         allow_review: bool = False,
         reviewer: Reviewer | None = None,
+        reviewer_note: str | None = None,
         timeout: float | None = None,
     ) -> None:
-        super().__init__(engine, journal, allow_review=allow_review, reviewer=reviewer)
+        super().__init__(
+            engine,
+            journal,
+            allow_review=allow_review,
+            reviewer=reviewer,
+            reviewer_note=reviewer_note,
+        )
         self.cwd = str(cwd) if cwd is not None else None
         self.timeout = timeout
 

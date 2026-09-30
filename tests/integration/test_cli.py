@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import sys
@@ -33,6 +34,17 @@ def _pending_seq(journal_path: Path, capsys: pytest.CaptureFixture[str]) -> int:
     """Ask what is pending and read the seq number out of the printed hint."""
     cli.main(["journal", "pending", str(journal_path)])
     return int(re.search(r"--request-seq (\d+)", capsys.readouterr().out).group(1))
+
+
+class _FakeTerminal(io.StringIO):
+    """A standard input that claims to be a terminal."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+def _type(monkeypatch: pytest.MonkeyPatch, answer: str) -> None:
+    monkeypatch.setattr(sys, "stdin", _FakeTerminal(answer))
 
 
 def test_version(capsys: pytest.CaptureFixture[str]) -> None:
@@ -858,3 +870,128 @@ def test_a_missing_anchor_file_is_reported(
 
     assert code == cli.EXIT_ERROR
     assert "cannot read anchor file" in capsys.readouterr().err
+
+
+# --------------------------------------------------------- interactive review
+def _reviewed_run(journal_path: Path, *extra: str) -> list[str]:
+    return [
+        "run",
+        "--policy",
+        "standard",
+        "--journal",
+        str(journal_path),
+        *extra,
+        "--",
+        "echo",
+        ".netrc",
+    ]
+
+
+def test_interactive_answers_yes_and_the_command_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal_path = tmp_path / "session.jsonl"
+    _type(monkeypatch, "y\n")
+
+    code = cli.main(_reviewed_run(journal_path, "--interactive"))
+    printed = capsys.readouterr()
+
+    assert code == cli.EXIT_OK
+    assert _results(journal_path)[-1]["status"] == "executed"
+    assert "run shell echo .netrc? [y/N]" in printed.err
+    assert "shell.credential-access" in printed.err
+    assert Journal(journal_path).verify().ok
+
+
+def test_interactive_answers_no_and_the_action_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal_path = tmp_path / "session.jsonl"
+    _type(monkeypatch, "n\n")
+
+    code = cli.main(_reviewed_run(journal_path, "--interactive"))
+
+    assert code == cli.EXIT_REVIEW
+    assert _results(journal_path)[-1]["status"] == "refused"
+    assert ".netrc" not in capsys.readouterr().out
+
+
+def test_interactive_records_that_a_person_answered(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal_path = tmp_path / "session.jsonl"
+    _type(monkeypatch, "yes\n")
+
+    cli.main(_reviewed_run(journal_path, "--interactive"))
+
+    decided = [
+        event for event in Journal(journal_path).read() if event.type is EventType.APPROVAL_DECIDED
+    ]
+    assert decided[0].actor is Actor.HUMAN
+    assert decided[0].payload["source"] == "callback"
+    assert decided[0].payload["note"] == "answered at the terminal"
+    assert decided[0].payload["granted"] is True
+    assert capsys.readouterr().out  # the command's output still went to stdout
+
+
+def test_an_empty_answer_counts_as_no(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    journal_path = tmp_path / "session.jsonl"
+    _type(monkeypatch, "\n")
+
+    code = cli.main(_reviewed_run(journal_path, "--interactive"))
+
+    assert code == cli.EXIT_REVIEW
+    assert _results(journal_path)[-1]["status"] == "refused"
+
+
+def test_interactive_refuses_when_there_is_no_terminal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Under pytest, stdin is not a terminal, which is exactly the CI case."""
+    journal_path = tmp_path / "session.jsonl"
+
+    code = cli.main(_reviewed_run(journal_path, "--interactive"))
+    printed = capsys.readouterr()
+
+    assert code == cli.EXIT_ERROR
+    assert "needs a terminal" in printed.err
+    assert "sentinel approve" in printed.err
+    assert Journal(journal_path).read() == []
+
+
+def test_interactive_and_allow_review_cannot_be_combined(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main(_reviewed_run(tmp_path / "session.jsonl", "--interactive", "--allow-review"))
+
+    assert exit_info.value.code == 2
+    assert "not allowed with" in capsys.readouterr().err
+
+
+def test_interactive_also_guards_a_write(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    journal_path = tmp_path / "session.jsonl"
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    _type(monkeypatch, "y\n")
+
+    code = cli.main(
+        [
+            "write",
+            "--policy",
+            "standard",
+            "--journal",
+            str(journal_path),
+            "--workspace",
+            str(workspace),
+            "--interactive",
+            ".env",
+            "--content",
+            "TOKEN=1",
+        ]
+    )
+
+    assert code == cli.EXIT_OK
+    assert (workspace / ".env").read_text(encoding="utf-8") == "TOKEN=1"

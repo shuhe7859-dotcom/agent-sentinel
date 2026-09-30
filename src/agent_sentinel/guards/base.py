@@ -151,11 +151,13 @@ class Guard(ABC, Generic[ResultT]):
         *,
         allow_review: bool = False,
         reviewer: Reviewer | None = None,
+        reviewer_note: str | None = None,
     ) -> None:
         self.engine = engine
         self.journal = journal
         self.allow_review = allow_review
         self.reviewer = reviewer
+        self.reviewer_note = reviewer_note or "answered by the configured reviewer callback"
 
     # ------------------------------------------------------------------ public
     def guard(self, action: Action, perform: Performer) -> ResultT:
@@ -236,7 +238,7 @@ class Guard(ABC, Generic[ResultT]):
                 action=action,
                 granted=granted,
                 source=SOURCE_CALLBACK,
-                note="answered by the configured reviewer callback",
+                note=self.reviewer_note,
             )
             return approval_from_event(event)
 

@@ -88,8 +88,15 @@ class GuardedFileSystem(Guard[FileSystemResult]):
         workspace: str | Path,
         allow_review: bool = False,
         reviewer: Reviewer | None = None,
+        reviewer_note: str | None = None,
     ) -> None:
-        super().__init__(engine, journal, allow_review=allow_review, reviewer=reviewer)
+        super().__init__(
+            engine,
+            journal,
+            allow_review=allow_review,
+            reviewer=reviewer,
+            reviewer_note=reviewer_note,
+        )
         self.workspace = Path(workspace).expanduser().resolve()
 
     @property

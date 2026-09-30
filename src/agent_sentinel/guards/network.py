@@ -168,10 +168,17 @@ class GuardedNetwork(Guard[NetworkResult]):
         *,
         allow_review: bool = False,
         reviewer: Reviewer | None = None,
+        reviewer_note: str | None = None,
         timeout: float | None = None,
         max_bytes: int = DEFAULT_MAX_BYTES,
     ) -> None:
-        super().__init__(engine, journal, allow_review=allow_review, reviewer=reviewer)
+        super().__init__(
+            engine,
+            journal,
+            allow_review=allow_review,
+            reviewer=reviewer,
+            reviewer_note=reviewer_note,
+        )
         self.timeout = timeout
         self.max_bytes = max_bytes
 

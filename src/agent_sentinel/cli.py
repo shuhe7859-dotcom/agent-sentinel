@@ -40,11 +40,12 @@ from .guards import (
     GuardedNetwork,
     GuardedShell,
     GuardResult,
+    Reviewer,
 )
 from .journal import Journal
 from .policy.engine import PolicyEngine
 from .policy.loader import load_policy
-from .policy.models import Action, ActionKind, Effect
+from .policy.models import Action, ActionKind, Decision, Effect
 from .policy.presets import available_presets, load_preset
 from .session import Session
 from .signing import (
@@ -116,10 +117,16 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--timeout", type=float, default=None, help="seconds before the command is killed"
     )
-    run.add_argument(
+    run_review = run.add_mutually_exclusive_group()
+    run_review.add_argument(
         "--allow-review",
         action="store_true",
         help="treat 'review' as 'allow' (records the decision either way)",
+    )
+    run_review.add_argument(
+        "--interactive",
+        action="store_true",
+        help="ask on the terminal before running a reviewed action",
     )
     run.add_argument("command", nargs=argparse.REMAINDER, help="the command, after '--'")
     run.set_defaults(handler=_handle_run)
@@ -296,11 +303,60 @@ def _add_guard_arguments(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="workspace root (default: current directory)",
     )
-    parser.add_argument(
+    review = parser.add_mutually_exclusive_group()
+    review.add_argument(
         "--allow-review",
         action="store_true",
         help="treat 'review' as 'allow' (records the decision either way)",
     )
+    review.add_argument(
+        "--interactive",
+        action="store_true",
+        help="ask on the terminal before running a reviewed action",
+    )
+
+
+INTERACTIVE_NOTE = "answered at the terminal"
+"""What goes in the journal when a person answers a prompt."""
+
+
+def _require_terminal(args: argparse.Namespace) -> None:
+    """Refuse an interactive prompt when there is nobody to answer it.
+
+    In a script or in CI, stdin is not a terminal. Carrying on would mean either
+    a run that hangs or a default that quietly decides whether a reviewed action
+    may proceed, so the only honest thing is to stop and say what to do instead.
+    """
+    if getattr(args, "interactive", False) and not sys.stdin.isatty():
+        raise SentinelError(
+            "--interactive needs a terminal on standard input, and there is not one "
+            "here. Where nobody is watching, record the answer instead: "
+            "sentinel approve <journal> --request-seq N"
+        )
+
+
+def _interactive_reviewer(args: argparse.Namespace) -> Reviewer | None:
+    """The callback that asks at the terminal, or ``None`` when not asked for."""
+    if not getattr(args, "interactive", False):
+        return None
+
+    def ask(action: Action, decision: Decision) -> bool:
+        # The prompt goes to stderr: stdout may be carrying the command's output.
+        print(f"{decision.rule_id or '(policy default)'}: {decision.reason}", file=sys.stderr)
+        print(
+            f"  run {action.kind.value} {action.subject}? [y/N] ",
+            end="",
+            file=sys.stderr,
+            flush=True,
+        )
+        try:
+            answer = input()
+        except EOFError:
+            answer = ""
+        print(file=sys.stderr)
+        return answer.strip().lower() in {"y", "yes"}
+
+    return ask
 
 
 def _resolve_engine(engine_source: str) -> PolicyEngine:
@@ -402,6 +458,7 @@ def _handle_run(args: argparse.Namespace) -> int:
         command = command[1:]
     if not command:
         raise SentinelError("no command given; put it after '--'")
+    _require_terminal(args)
 
     engine = _resolve_engine(args.policy)
     journal = Journal(args.journal)
@@ -412,6 +469,8 @@ def _handle_run(args: argparse.Namespace) -> int:
             journal,
             cwd=args.cwd,
             allow_review=args.allow_review,
+            reviewer=_interactive_reviewer(args),
+            reviewer_note=INTERACTIVE_NOTE,
             timeout=args.timeout,
         )
         result = runner.run(" ".join(command))
@@ -425,6 +484,7 @@ def _handle_run(args: argparse.Namespace) -> int:
 
 
 def _handle_write(args: argparse.Namespace) -> int:
+    _require_terminal(args)
     engine = _resolve_engine(args.policy)
     journal = Journal(args.journal)
     payload = _write_payload(args)
@@ -432,7 +492,12 @@ def _handle_write(args: argparse.Namespace) -> int:
 
     with Session(engine, journal, cwd=str(Path.cwd()), workspace=str(workspace)) as session:
         guard = GuardedFileSystem(
-            engine, journal, workspace=workspace, allow_review=args.allow_review
+            engine,
+            journal,
+            workspace=workspace,
+            allow_review=args.allow_review,
+            reviewer=_interactive_reviewer(args),
+            reviewer_note=INTERACTIVE_NOTE,
         )
         result = guard.write(args.path, payload, create_parents=args.create_parents)
 
@@ -446,13 +511,19 @@ def _handle_write(args: argparse.Namespace) -> int:
 
 
 def _handle_delete(args: argparse.Namespace) -> int:
+    _require_terminal(args)
     engine = _resolve_engine(args.policy)
     journal = Journal(args.journal)
     workspace = _workspace_of(args)
 
     with Session(engine, journal, cwd=str(Path.cwd()), workspace=str(workspace)) as session:
         guard = GuardedFileSystem(
-            engine, journal, workspace=workspace, allow_review=args.allow_review
+            engine,
+            journal,
+            workspace=workspace,
+            allow_review=args.allow_review,
+            reviewer=_interactive_reviewer(args),
+            reviewer_note=INTERACTIVE_NOTE,
         )
         result = guard.delete(args.path)
 
@@ -469,6 +540,7 @@ def _handle_delete(args: argparse.Namespace) -> int:
 
 
 def _handle_fetch(args: argparse.Namespace) -> int:
+    _require_terminal(args)
     engine = _resolve_engine(args.policy)
     journal = Journal(args.journal)
     workspace = _workspace_of(args)
@@ -478,6 +550,8 @@ def _handle_fetch(args: argparse.Namespace) -> int:
             engine,
             journal,
             allow_review=args.allow_review,
+            reviewer=_interactive_reviewer(args),
+            reviewer_note=INTERACTIVE_NOTE,
             timeout=args.timeout,
             max_bytes=args.max_bytes,
         )
