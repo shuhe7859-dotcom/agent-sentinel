@@ -70,11 +70,20 @@ rewrite -- now have an answer, with the caveat that the answer is opt-in.
 
 ## M4 — Make it usable where agents actually run
 
-- [ ] `sentinel run --shell` as a drop-in wrapper for an existing workflow
-- [ ] An MCP server exposing guarded tools, so a model cannot bypass the guardrail by construction
+In progress. The reporting and regression half is done; the integration half —
+where a model is given guarded tools rather than a shell — is not.
+
+- [x] `run -c`, so `SHELL := sentinel` works in a Makefile with no recipe edited.
+      (The roadmap originally said `run --shell`; Make appends the `-c 'recipe'`
+      itself, so the flag would have had nothing to do. It survives only as a
+      readability marker that insists on `-c`.)
+- [x] `sentinel journal replay`, a read-only transcript grouped by session
+- [x] `sentinel journal export --format html|sarif`
+- [x] A policy test mode: `sentinel policy test --policy P --cases F`, with
+      cases for the shipped presets in `examples/cases/` run by CI
+- [ ] An MCP server exposing guarded tools, so a model cannot bypass the
+      guardrail by construction
 - [ ] Adapters for at least one agent framework
-- [ ] `sentinel journal replay` and `sentinel journal export --format html|sarif`
-- [ ] A policy test mode: fixtures of commands with their expected verdicts, run in CI
 
 ## Backlog / ideas
 

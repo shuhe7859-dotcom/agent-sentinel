@@ -8,7 +8,7 @@ English | [简体中文](README.zh-CN.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/tests-231%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-290%20passing-brightgreen.svg)](tests/)
 
 A coding agent edits your files, runs your commands and talks to the network.
 Two questions follow, and together they are the whole project:
@@ -40,8 +40,8 @@ an actual action.
 ## Status
 
 Early, but working. The record format, the policy engine, all three guarded
-surfaces, the approval loop and the tamper-evidence toolkit are implemented and
-covered by 231 tests.
+surfaces, the approval loop, the tamper-evidence toolkit and the reporting are
+implemented and covered by 290 tests.
 
 | Area | State |
 | --- | --- |
@@ -57,6 +57,9 @@ covered by 231 tests.
 | Guarded HTTP egress, matched by host, redirects not followed | implemented |
 | Anchors that catch a truncated tail and a replaced journal | implemented |
 | Optional Ed25519 signatures over anchors | implemented |
+| Policy regression cases, runnable in CI | implemented |
+| `journal replay` and `journal export --format html\|sarif` | implemented |
+| `run -c`, so `sentinel` can be a Makefile `SHELL` | implemented |
 | `sentinel` CLI with stable exit codes | implemented |
 | MCP server, framework adapters, journal replay | planned (M4) |
 
@@ -229,6 +232,23 @@ Every anchor is a checkpoint, so a rewrite of an early record is caught by an
 anchor taken before it. Anchors can be signed as well, so a third party without
 the private key cannot forge one — see [`docs/anchoring.md`](docs/anchoring.md).
 
+### Drop it in front of an existing workflow
+
+Make invokes its shell as `$(SHELL) -c 'recipe'`, so pointing `SHELL` at
+`sentinel` puts every recipe behind the guardrail without editing one of them:
+
+```make
+SHELL := /path/to/sentinel
+.SHELLFLAGS := run --policy standard --journal .sentinel/ci.jsonl -c
+
+test:
+	pytest -q          # recorded, and refused if the policy says so
+```
+
+`-c` is the same command as the `--` form, so approvals, session framing and
+exit codes all behave identically. A recipe the policy denies fails the build,
+which is the point.
+
 ## Using the library
 
 ```python
@@ -307,7 +327,8 @@ project-specific policy is to copy it and narrow it.
 | --- | --- |
 | `sentinel policy presets` | List the built-in policies. |
 | `sentinel policy check --policy P --kind K --target T [--json]` | Evaluate one action; run nothing. |
-| `sentinel run --policy P --journal J [--cwd D] [--timeout S] [--allow-review \| --interactive] -- CMD…` | Run a command through the guardrail and record it. |
+| `sentinel policy test --policy P --cases F` | Run regression cases; exits non-zero if one does not hold. |
+| `sentinel run --policy P --journal J [--cwd D] [--timeout S] [--allow-review \| --interactive] (-c CMD \| -- CMD…)` | Run a command through the guardrail and record it. |
 | `sentinel write --policy P --journal J [--workspace W] [--create-parents] [--interactive] PATH [--content T \| --from-file F]` | Write a file inside the workspace; reads stdin when no content is given. |
 | `sentinel delete --policy P --journal J [--workspace W] [--interactive] PATH` | Remove a single file inside the workspace. |
 | `sentinel fetch --policy P --journal J [--method M] [--timeout S] [--max-bytes N] [--interactive] URL` | Fetch a URL; the guard makes the request and the body goes to stdout. |
@@ -315,6 +336,8 @@ project-specific policy is to copy it and narrow it.
 | `sentinel journal show J [--limit N] [--json]` | Print recorded events. |
 | `sentinel journal pending J` | List escalations that still need a human. |
 | `sentinel journal verify J [--anchors A] [--key PUB]` | Verify the hash chain, and optionally check it against anchors. |
+| `sentinel journal replay J [--session ID] [--json]` | Read the log back as a transcript; nothing is executed. |
+| `sentinel journal export J --format html\|sarif [--out F] [--anchors A] [--key PUB]` | Write a report, for a person or for a code-scanning tool. |
 | `sentinel journal note J "text"` | Append a human annotation. |
 | `sentinel journal anchor J [--file A] [--command CMD] [--note T] [--sign-with KEY]` | Write the head hash somewhere the journal cannot reach. |
 | `sentinel keygen [--private P] [--public P] [--force]` | Generate an Ed25519 key pair for signing anchors. |
@@ -347,11 +370,13 @@ agent-sentinel/
 │   ├── session.py           session.start / session.end framing
 │   ├── anchors.py           head hashes written outside the journal
 │   ├── signing.py           Ed25519 key files and signatures (the sign extra)
+│   ├── report.py            transcripts, HTML and SARIF
 │   ├── errors.py            exception hierarchy
 │   ├── cli.py               the `sentinel` command
 │   ├── policy/
 │   │   ├── models.py        Action, Rule, Policy, Decision, Effect
 │   │   ├── loader.py        TOML parsing and validation
+│   │   ├── cases.py         regression cases for a policy
 │   │   ├── engine.py        ordering, matching, verdict
 │   │   └── presets.py       permissive / standard / strict
 │   └── guards/
@@ -365,6 +390,7 @@ agent-sentinel/
 │   └── fixtures/policies/   example policies used by tests
 ├── examples/
 │   ├── quickstart.py        a five-minute tour
+│   ├── cases/               regression cases for the shipped presets
 │   └── policies/            hand-written policy examples
 ├── docs/
 │   ├── architecture.md      layers, data flow, extension points
@@ -372,6 +398,7 @@ agent-sentinel/
 │   ├── approvals.md         how a human "yes" becomes evidence
 │   ├── guards.md            the three surfaces and what each one refuses
 │   ├── anchoring.md         truncation, rewrites, and what a signature proves
+│   ├── reporting.md         replaying a journal and exporting a report
 │   ├── event-schema.md      the on-disk record format
 │   ├── threat-model.md      what this defends against, and what it does not
 │   ├── roadmap.md           milestones
@@ -408,6 +435,7 @@ are written out in [`docs/threat-model.md`](docs/threat-model.md).
 | [`docs/approvals.md`](docs/approvals.md) | You are deciding how a human should answer an escalation. |
 | [`docs/guards.md`](docs/guards.md) | You are embedding a guard, or wondering why a write was refused. |
 | [`docs/anchoring.md`](docs/anchoring.md) | You want to know that nothing was quietly removed from a journal. |
+| [`docs/reporting.md`](docs/reporting.md) | You want to read a journal back, or hand someone a report. |
 | [`docs/event-schema.md`](docs/event-schema.md) | You want to read a journal without this library, or change the format. |
 | [`docs/threat-model.md`](docs/threat-model.md) | You need to know what is in scope, and what is not. |
 | [`docs/development.md`](docs/development.md) | You are setting up, contributing, or releasing. |

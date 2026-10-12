@@ -126,6 +126,13 @@ command's output is transient, it is the first thing anyone reaches for when
 reading a journal, and it is the only evidence of what a command actually did.
 Previews are capped at 2000 characters and carry a digest of the whole output.
 
+It can be given the command either way round: after `--`, or with `-c`, the form
+a shell is invoked with. That second form is what lets `sentinel` sit in front of
+an existing workflow — `SHELL := sentinel` in a Makefile, with
+`.SHELLFLAGS := run --policy … -c` — without editing a single recipe. There is
+also a `--shell` marker, which does nothing except make that intent legible and
+insist on `-c`; Make appends the `-c 'recipe'` itself.
+
 ## Statuses
 
 | Status | Meaning | Where |

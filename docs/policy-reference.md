@@ -155,6 +155,44 @@ DENY   [team] shell.publish: publishing is a human decision here
 which is the intended way to start a project-specific policy: copy it, then
 narrow it.
 
+## Testing a policy
+
+A policy is a set of rules, and rules drift: someone narrows a pattern, someone
+else changes a priority, and the thing you cared about quietly stops being
+blocked. Cases turn "this command must be reviewed" into something a test
+runner can check.
+
+```toml
+# examples/cases/standard.toml
+schema = 1
+
+[[case]]
+name   = "a force push"
+kind   = "shell"                  # optional; the default is shell
+target = "git push --force origin main"
+expect = "review"                 # allow, review or deny
+rule   = "shell.git-force-push"   # optional: the rule that must fire
+```
+
+```console
+$ sentinel policy test --policy standard --cases examples/cases/standard.toml
+ok   a force push: shell git push --force origin main -> review (shell.git-force-push)
+ok   the test runner: shell pytest -q -> allow
+
+15 passed against policy standard
+```
+
+- It exits `0` when every case holds and `1` when one does not, so it drops
+  straight into CI. This repository runs its own cases on every push.
+- **Nothing is executed and nothing is recorded.** It asks the same question
+  `sentinel policy check` asks, once per case, and needs no journal.
+- `rule` is worth setting. Without it a case still checks the effect, but a
+  pattern that was widened to catch something else can pass; with it, the case
+  pins which rule must fire.
+- The whole file is validated before a single case runs. Finding out that case
+  seven is malformed after six have passed helps nobody.
+- One policy per run. To compare the presets, run it three times.
+
 ## Validation errors
 
 `load_policy` fails loudly, never partially. You get a `PolicyError` for a

@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/tests-231%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-290%20passing-brightgreen.svg)](tests/)
 
 编码智能体会改动你的文件、执行你的命令、访问外部网络。由此引出两个问题，它们构成了
 这个项目的全部：
@@ -37,8 +37,8 @@ status:  awaiting_approval
 
 ## 当前状态
 
-早期但可用。记录格式、策略引擎、三个受控执行面、审批闭环以及防篡改工具都已实现，
-并有 231 个测试覆盖。
+早期但可用。记录格式、策略引擎、三个受控执行面、审批闭环、防篡改工具以及日志报告
+都已实现，并有 290 个测试覆盖。
 
 | 模块 | 状态 |
 | --- | --- |
@@ -54,6 +54,9 @@ status:  awaiting_approval
 | 受控 HTTP 出口，按主机名匹配，不跟随重定向 | 已实现 |
 | 锚点：能发现尾部截断与整体重写 | 已实现 |
 | 可选的 Ed25519 锚点签名 | 已实现 |
+| 策略回归用例，可直接进 CI | 已实现 |
+| `journal replay` 与 `journal export --format html\|sarif` | 已实现 |
+| `run -c`，可把 `sentinel` 当作 Makefile 的 `SHELL` | 已实现 |
 | `sentinel` 命令行与稳定退出码 | 已实现 |
 | MCP Server、框架适配器、日志回放 | 计划中（M4） |
 
@@ -218,6 +221,22 @@ status:  BROKEN - 1 issue(s)
 **每一个锚点都是一道检查点**，所以早期记录被重写会被更早的锚点抓到。锚点还可以签名，
 这样没有私钥的第三方无法伪造——详见 [`docs/anchoring.md`](docs/anchoring.md)。
 
+### 直接套在现有工作流上
+
+Make 调用它的 shell 时是 `$(SHELL) -c 'recipe'`，所以把 `SHELL` 指向 `sentinel`，
+就能让每一条 recipe 都经过护栏，而 recipe 一行都不用改：
+
+```make
+SHELL := /path/to/sentinel
+.SHELLFLAGS := run --policy standard --journal .sentinel/ci.jsonl -c
+
+test:
+	pytest -q          # 被记录；策略说不行就拒绝
+```
+
+`-c` 与 `--` 形式走的是同一条路径，所以审批、会话框架、退出码完全一致。被策略拒绝的
+recipe 会让构建失败——这正是目的。
+
 ## 作为库使用
 
 ```python
@@ -294,7 +313,8 @@ reason   = "发布在本仓库是人的决定"
 | --- | --- |
 | `sentinel policy presets` | 列出内置策略 |
 | `sentinel policy check --policy P --kind K --target T [--json]` | 只判定一个动作，不执行 |
-| `sentinel run --policy P --journal J [--cwd D] [--timeout S] [--allow-review \| --interactive] -- CMD…` | 通过护栏执行命令并记录 |
+| `sentinel policy test --policy P --cases F` | 跑策略回归用例；有不符就返回非零 |
+| `sentinel run --policy P --journal J [--cwd D] [--timeout S] [--allow-review \| --interactive] (-c CMD \| -- CMD…)` | 通过护栏执行命令并记录 |
 | `sentinel write --policy P --journal J [--workspace W] [--create-parents] [--interactive] PATH [--content T \| --from-file F]` | 在工作区内写文件；不给内容则从标准输入读取 |
 | `sentinel delete --policy P --journal J [--workspace W] [--interactive] PATH` | 删除工作区内的单个文件 |
 | `sentinel fetch --policy P --journal J [--method M] [--timeout S] [--max-bytes N] [--interactive] URL` | 取回一个 URL；请求由守卫发起，响应体输出到标准输出 |
@@ -302,6 +322,8 @@ reason   = "发布在本仓库是人的决定"
 | `sentinel journal show J [--limit N] [--json]` | 打印已记录的事件 |
 | `sentinel journal pending J` | 列出仍需要人工处理的升级 |
 | `sentinel journal verify J [--anchors A] [--key PUB]` | 校验哈希链，并可选择与锚点对照 |
+| `sentinel journal replay J [--session ID] [--json]` | 把日志还原成可读经过；不执行任何东西 |
+| `sentinel journal export J --format html\|sarif [--out F] [--anchors A] [--key PUB]` | 导出报告，给人看或给代码扫描工具用 |
 | `sentinel journal note J "text"` | 追加一条人工批注 |
 | `sentinel journal anchor J [--file A] [--command CMD] [--note T] [--sign-with KEY]` | 把头部哈希写到日志够不着的地方 |
 | `sentinel keygen [--private P] [--public P] [--force]` | 生成用于签名锚点的 Ed25519 密钥对 |
@@ -333,11 +355,13 @@ agent-sentinel/
 │   ├── session.py           会话开始/结束的记录框架
 │   ├── anchors.py           写到日志之外的头部哈希
 │   ├── signing.py           Ed25519 密钥与签名（可选依赖 sign）
+│   ├── report.py            文本经过、HTML 与 SARIF 报告
 │   ├── errors.py            异常体系
 │   ├── cli.py               sentinel 命令
 │   ├── policy/
 │   │   ├── models.py        Action、Rule、Policy、Decision、Effect
 │   │   ├── loader.py        TOML 解析与校验
+│   │   ├── cases.py         策略回归用例
 │   │   ├── engine.py        排序、匹配、判定
 │   │   └── presets.py       permissive / standard / strict
 │   └── guards/
@@ -351,6 +375,7 @@ agent-sentinel/
 │   └── fixtures/policies/   测试用策略样例
 ├── examples/
 │   ├── quickstart.py        五分钟演示
+│   ├── cases/               内置预设的回归用例
 │   └── policies/            手写策略样例
 ├── docs/
 │   ├── architecture.md      分层、数据流、扩展点
@@ -358,6 +383,7 @@ agent-sentinel/
 │   ├── approvals.md         人工批准如何变成证据
 │   ├── guards.md            三个执行面，以及每个守卫会拒绝什么
 │   ├── anchoring.md         截断、重写，以及签名到底证明了什么
+│   ├── reporting.md         日志回放与报告导出
 │   ├── event-schema.md      落盘记录格式
 │   ├── threat-model.md      防御什么、不防御什么
 │   ├── roadmap.md           里程碑
@@ -393,6 +419,7 @@ agent-sentinel **不是沙箱**。它决定是否启动一个进程，但不隔�
 | [`docs/approvals.md`](docs/approvals.md) | 正在决定人工该如何答复一次升级 |
 | [`docs/guards.md`](docs/guards.md) | 正在接入某个守卫，或想知道某次写入为什么被拒 |
 | [`docs/anchoring.md`](docs/anchoring.md) | 想确认日志没有被人悄悄删掉一段 |
+| [`docs/reporting.md`](docs/reporting.md) | 想把日志读回来，或者交一份报告给别人 |
 | [`docs/event-schema.md`](docs/event-schema.md) | 想脱离本库读日志，或要改动记录格式 |
 | [`docs/threat-model.md`](docs/threat-model.md) | 需要知道哪些在范围内、哪些不在 |
 | [`docs/development.md`](docs/development.md) | 正在搭环境、贡献代码或准备发版 |

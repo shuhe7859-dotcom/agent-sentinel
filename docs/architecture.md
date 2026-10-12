@@ -103,6 +103,8 @@ decision that authorises one execution of one action; see
 | `src/agent_sentinel/journal.py` | Append-only file I/O, chain verification, reports. |
 | `src/agent_sentinel/approvals.py` | Reading and writing approvals; scope, single use, expiry. |
 | `src/agent_sentinel/session.py` | Framing work with `session.start` / `session.end`. |
+| `src/agent_sentinel/report.py` | Reading a journal back: transcripts, HTML, SARIF. |
+| `src/agent_sentinel/policy/cases.py` | Regression cases: actions and the verdicts they must get. |
 | `src/agent_sentinel/policy/models.py` | `Action`, `Rule`, `Policy`, `Decision`, `Effect`. |
 | `src/agent_sentinel/policy/loader.py` | TOML parsing and validation into the model. |
 | `src/agent_sentinel/policy/engine.py` | Rule ordering, matching, verdict. |
@@ -177,6 +179,10 @@ Implemented and covered by tests:
   rather than three times;
 * approvals as first-class records: action-scoped, single use, expirable, and
   readable back out of the journal;
+* policy regression cases, so a rule that stops blocking something is caught
+  before it is merged;
+* a tolerant scan that lets a report be produced about a damaged journal;
+* transcripts, self-contained HTML reports and SARIF for code scanning;
 * sessions that record the policy identity and a fingerprint of its content;
 * `reviewer` callbacks and `allow_review`, both of which leave a record saying
   who answered and why they were asked;
@@ -184,10 +190,8 @@ Implemented and covered by tests:
 
 Designed but not built yet (see [`roadmap.md`](roadmap.md)):
 
-* an interactive terminal reviewer for `sentinel run`;
-* `journal replay` and `journal export`;
-* adapters for agent frameworks and an MCP server;
-* signed journals and external anchoring of the head hash.
+* adapters for agent frameworks, and an MCP server that exposes the guards as
+  tools so a model cannot route around them.
 
 ## Where the constraints live
 

@@ -81,6 +81,25 @@ are still treated as breaking, because journals outlive code.
 - **`GuardedFileSystem`, `GuardedNetwork`, `GuardedShell` and `Guard` take a
   `reviewer_note`**, so a journal can tell a live answer from a programmatic
   one. The CLI writes `answered at the terminal`.
+- **Policy regression cases.** `sentinel policy test --policy P --cases F`
+  evaluates a file of cases and exits non-zero if one does not hold, so a rule
+  that quietly stops blocking something fails the build. Cases are TOML, the
+  whole file is validated before any case runs, and `rule` optionally pins which
+  rule has to fire. `examples/cases/standard.toml` ships with the project and CI
+  runs it on every push.
+- **`sentinel journal replay`**, a read-only transcript grouped by session, with
+  `--session` (prefix matching, because that is what the rendering shows) and
+  `--json`. It never executes anything: a journal is evidence, not a script.
+- **`sentinel journal export --format html|sarif`.** The HTML is one
+  self-contained file with everything escaped on the way in, since a journal
+  records what an agent typed and an agent can type `<script>`. The SARIF is
+  2.1.0, one result per non-`allow` verdict, with journal problems reported as
+  tool notifications rather than dressed up as findings about your code.
+- **`run -c COMMAND`**, the form a shell is invoked with, so `SHELL := sentinel`
+  works in a Makefile. `--shell` marks that intent and insists on `-c`.
+- **`Journal.scan()`**, a tolerant walk that returns the readable records and the
+  problems together; `verify()` is now built on it. `iter_events()` still
+  refuses to guess, which is right for reading and wrong for reporting.
 
 ### Changed
 
