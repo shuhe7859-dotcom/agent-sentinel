@@ -52,6 +52,32 @@ def normalize_target(target: str) -> str:
     return target.replace("\\", "/")
 
 
+def parse_effect(value: Any) -> Effect:
+    """Turn a value into an :class:`Effect`.
+
+    Raises:
+        ValueError: the value names no effect.
+    """
+    try:
+        return Effect(str(value).lower())
+    except ValueError as exc:
+        allowed = ", ".join(effect.value for effect in Effect)
+        raise ValueError(f"unknown effect {value!r}; expected one of {allowed}") from exc
+
+
+def parse_action_kind(value: Any) -> ActionKind:
+    """Turn a value into an :class:`ActionKind`.
+
+    Raises:
+        ValueError: the value names no action kind.
+    """
+    try:
+        return ActionKind(str(value).lower())
+    except ValueError as exc:
+        allowed = ", ".join(kind.value for kind in ActionKind)
+        raise ValueError(f"unknown kind {value!r}; expected one of {allowed}") from exc
+
+
 @dataclass(frozen=True)
 class Action:
     """Something an agent wants to do."""

@@ -48,6 +48,12 @@ jobs:
       - name: Test
         run: python -m pytest --cov=agent_sentinel --cov-report=xml
 
+      - name: Policy regression cases
+        run: >
+          python -m agent_sentinel policy test
+          --policy standard
+          --cases examples/cases/standard.toml
+
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         uses: actions/upload-artifact@v4
@@ -55,4 +61,3 @@ jobs:
           name: coverage-xml
           path: coverage.xml
           if-no-files-found: warn
-

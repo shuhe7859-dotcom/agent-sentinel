@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -995,3 +998,390 @@ def test_interactive_also_guards_a_write(
 
     assert code == cli.EXIT_OK
     assert (workspace / ".env").read_text(encoding="utf-8") == "TOKEN=1"
+
+
+# ------------------------------------------------------------- policy cases
+EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
+
+
+def _case_file(tmp_path: Path, body: str) -> Path:
+    path = tmp_path / "cases.toml"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_policy_test_reports_every_case(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    cases = _case_file(
+        tmp_path,
+        'schema = 1\n\n[[case]]\nname = "the tests"\ntarget = "pytest -q"\nexpect = "allow"\n',
+    )
+
+    code = cli.main(["policy", "test", "--policy", "standard", "--cases", str(cases)])
+    printed = capsys.readouterr().out
+
+    assert code == cli.EXIT_OK
+    assert "ok " in printed
+    assert "the tests" in printed
+    assert "1 passed against policy standard" in printed
+
+
+def test_policy_test_fails_and_says_what_it_expected(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cases = _case_file(
+        tmp_path,
+        'schema = 1\n\n[[case]]\ntarget = "rm -rf /"\nexpect = "allow"\n',
+    )
+
+    code = cli.main(["policy", "test", "--policy", "standard", "--cases", str(cases)])
+    printed = capsys.readouterr().out
+
+    assert code == cli.EXIT_ERROR
+    assert "FAIL" in printed
+    assert "expected allow, got deny" in printed
+    assert "0 passed, 1 failed" in printed
+
+
+def test_policy_test_rejects_a_malformed_case_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cases = _case_file(tmp_path, 'schema = 1\n\n[[case]]\nexpect = "allow"\n')
+
+    code = cli.main(["policy", "test", "--policy", "standard", "--cases", str(cases)])
+
+    assert code == cli.EXIT_ERROR
+    assert "needs a non-empty 'target'" in capsys.readouterr().err
+
+
+def test_policy_test_does_not_need_a_journal(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """It only asks for verdicts; nothing is executed and nothing is recorded."""
+    cases = _case_file(tmp_path, 'schema = 1\n\n[[case]]\ntarget = "pytest -q"\nexpect = "allow"\n')
+
+    assert cli.main(["policy", "test", "--policy", "standard", "--cases", str(cases)]) == 0
+    assert list(tmp_path.glob("*.jsonl")) == []
+    capsys.readouterr()
+
+
+def test_the_shipped_cases_pass_for_the_standard_preset(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = cli.main(
+        [
+            "policy",
+            "test",
+            "--policy",
+            "standard",
+            "--cases",
+            str(EXAMPLES / "cases" / "standard.toml"),
+        ]
+    )
+    printed = capsys.readouterr().out
+
+    assert code == cli.EXIT_OK
+    assert "passed against policy standard" in printed
+
+
+# -------------------------------------------------------------- journal read
+def _one_session(tmp_path: Path, command: str = "echo hi") -> Path:
+    """A journal holding one framed session, via the `-c` form."""
+    journal_path = tmp_path / "session.jsonl"
+    cli.main(["run", "--policy", "standard", "--journal", str(journal_path), "-c", command])
+    return journal_path
+
+
+def test_journal_replay_prints_a_transcript(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _one_session(tmp_path)
+    capsys.readouterr()
+
+    code = cli.main(["journal", "replay", str(journal_path)])
+    printed = capsys.readouterr().out
+
+    assert code == cli.EXIT_OK
+    assert "session " in printed
+    assert "action.proposed" in printed
+    assert "echo hi" in printed
+    assert "status:  ok" in printed
+
+
+def test_journal_replay_json_is_parseable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _one_session(tmp_path)
+    capsys.readouterr()
+
+    assert cli.main(["journal", "replay", str(journal_path), "--json"]) == cli.EXIT_OK
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["ok"] is True
+    assert len(payload["sessions"]) == 1
+    assert payload["sessions"][0]["policy"] == "standard"
+
+
+def test_journal_replay_can_pick_one_session(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _one_session(tmp_path, "echo first")
+    _one_session(tmp_path, "echo second")
+    capsys.readouterr()
+    starts = [
+        event for event in Journal(journal_path).read() if event.type is EventType.SESSION_START
+    ]
+    session_id = str(starts[0].payload["session_id"])
+
+    assert (
+        cli.main(["journal", "replay", str(journal_path), "--session", session_id[:12]])
+        == cli.EXIT_OK
+    )
+    printed = capsys.readouterr().out
+
+    assert "echo first" in printed
+    assert "echo second" not in printed
+
+
+def test_journal_replay_never_executes_anything(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    marker = tmp_path / "marker.txt"
+    journal_path = tmp_path / "session.jsonl"
+    Journal(journal_path).append(
+        EventType.ACTION_PROPOSED, Actor.AGENT, {"kind": "shell", "target": f"touch {marker}"}
+    )
+    capsys.readouterr()
+
+    assert cli.main(["journal", "replay", str(journal_path)]) == cli.EXIT_OK
+
+    assert f"touch {marker}" in capsys.readouterr().out
+    assert not marker.exists()
+
+
+# ------------------------------------------------------------ journal export
+def test_journal_export_writes_html_to_a_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _one_session(tmp_path)
+    target = tmp_path / "report.html"
+    capsys.readouterr()
+
+    code = cli.main(
+        ["journal", "export", str(journal_path), "--format", "html", "--out", str(target)]
+    )
+    printed = capsys.readouterr()
+
+    assert code == cli.EXIT_OK
+    assert target.is_file()
+    assert "wrote html report" in printed.err
+    assert printed.out == ""
+    assert "<!doctype html>" in target.read_text(encoding="utf-8")
+
+
+def test_journal_export_defaults_to_stdout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _one_session(tmp_path)
+    capsys.readouterr()
+
+    assert cli.main(["journal", "export", str(journal_path), "--format", "html"]) == cli.EXIT_OK
+    assert capsys.readouterr().out.startswith("<!doctype html>")
+
+
+def test_journal_export_sarif_parses(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    journal_path = _one_session(tmp_path, "rm -rf /")
+    capsys.readouterr()
+
+    assert cli.main(["journal", "export", str(journal_path), "--format", "sarif"]) == cli.EXIT_OK
+    sarif = json.loads(capsys.readouterr().out)
+
+    assert sarif["version"] == "2.1.0"
+    assert sarif["runs"][0]["results"][0]["level"] == "error"
+
+
+def test_journal_export_reports_a_broken_anchor(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _one_session(tmp_path, "echo hi")
+    anchors = tmp_path / "anchors.jsonl"
+    cli.main(["journal", "anchor", str(journal_path), "--file", str(anchors)])
+    lines = journal_path.read_text(encoding="utf-8").splitlines()
+    journal_path.write_text("\n".join(lines[:-1]) + "\n", encoding="utf-8")
+    capsys.readouterr()
+
+    code = cli.main(
+        [
+            "journal",
+            "export",
+            str(journal_path),
+            "--format",
+            "html",
+            "--anchors",
+            str(anchors),
+        ]
+    )
+    printed = capsys.readouterr().out
+
+    assert code == cli.EXIT_OK
+    assert "BROKEN" in printed
+    assert "truncated" in printed
+
+
+def test_journal_export_rejects_a_key_without_anchors(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = _one_session(tmp_path)
+    _, public = _keypair(tmp_path)
+    capsys.readouterr()
+
+    code = cli.main(
+        [
+            "journal",
+            "export",
+            str(journal_path),
+            "--format",
+            "html",
+            "--key",
+            str(public),
+        ]
+    )
+
+    assert code == cli.EXIT_ERROR
+    assert "--anchors" in capsys.readouterr().err
+
+
+# ----------------------------------------------------------------- run -c
+def test_run_accepts_the_form_a_shell_uses(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    journal_path = tmp_path / "session.jsonl"
+
+    code = cli.main(
+        ["run", "--policy", "standard", "--journal", str(journal_path), "-c", "echo hi"]
+    )
+    printed = capsys.readouterr()
+
+    assert code == cli.EXIT_OK
+    assert "hi" in printed.out
+    assert _event_types(journal_path) == [
+        "session.start",
+        "action.proposed",
+        "policy.decision",
+        "action.result",
+        "session.end",
+    ]
+    assert _results(journal_path)[-1]["status"] == "executed"
+
+
+def test_the_two_command_forms_are_equivalent(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    inline = tmp_path / "inline.jsonl"
+    separate = tmp_path / "separate.jsonl"
+
+    cli.main(["run", "--policy", "standard", "--journal", str(inline), "-c", "echo same"])
+    cli.main(["run", "--policy", "standard", "--journal", str(separate), "--", "echo", "same"])
+    capsys.readouterr()
+
+    assert _results(inline)[0]["status"] == _results(separate)[0]["status"]
+    assert (
+        Journal(inline).read()[1].payload["target"] == Journal(separate).read()[1].payload["target"]
+    )
+
+
+def test_run_refuses_both_command_forms_at_once(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = cli.main(
+        [
+            "run",
+            "--policy",
+            "standard",
+            "--journal",
+            str(tmp_path / "session.jsonl"),
+            "-c",
+            "echo hi",
+            "--",
+            "echo",
+            "hi",
+        ]
+    )
+
+    assert code == cli.EXIT_ERROR
+    assert "not both" in capsys.readouterr().err
+
+
+def test_run_refuses_a_shell_marker_with_nothing_to_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    code = cli.main(
+        ["run", "--policy", "standard", "--journal", str(tmp_path / "session.jsonl"), "--shell"]
+    )
+
+    assert code == cli.EXIT_ERROR
+    assert "always invoked with -c" in capsys.readouterr().err
+
+
+def test_a_makefile_can_use_sentinel_as_its_shell(tmp_path: Path) -> None:
+    """The claim is that an existing recipe needs no edit; this is that claim."""
+    if os.name == "nt":
+        pytest.skip("this is a POSIX shell story")
+    make = shutil.which("make")
+    sentinel = shutil.which("sentinel")
+    if make is None or sentinel is None:
+        pytest.skip("make, or an installed sentinel console script, is not available here")
+
+    journal_path = tmp_path / "session.jsonl"
+    makefile = tmp_path / "Makefile"
+    makefile.write_text(
+        f"SHELL := {sentinel}\n"
+        f".SHELLFLAGS := run --policy standard --journal {journal_path} -c\n"
+        ".PHONY: all\n"
+        "all:\n"
+        "\techo hello from a recipe\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(  # noqa: S603 - a fixed argv, no shell involved
+        [make, "-C", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "hello from a recipe" in completed.stdout
+    proposed = [
+        event.payload["target"]
+        for event in Journal(journal_path).read()
+        if event.type is EventType.ACTION_PROPOSED
+    ]
+    assert proposed == ["echo hello from a recipe"]
+
+
+def test_a_denied_recipe_fails_the_build(tmp_path: Path) -> None:
+    if os.name == "nt":
+        pytest.skip("this is a POSIX shell story")
+    make = shutil.which("make")
+    sentinel = shutil.which("sentinel")
+    if make is None or sentinel is None:
+        pytest.skip("make, or an installed sentinel console script, is not available here")
+
+    makefile = tmp_path / "Makefile"
+    makefile.write_text(
+        f"SHELL := {sentinel}\n"
+        f".SHELLFLAGS := run --policy standard --journal {tmp_path / 'j.jsonl'} -c\n"
+        ".PHONY: all\n"
+        "all:\n"
+        "\trm -rf /\n",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(  # noqa: S603 - a fixed argv, no shell involved
+        [make, "-C", str(tmp_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0

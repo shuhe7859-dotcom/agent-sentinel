@@ -26,7 +26,15 @@ from pathlib import Path
 from typing import Any
 
 from ..errors import PolicyError
-from .models import DEFAULT_PRIORITY, ActionKind, Effect, Policy, Rule
+from .models import (
+    DEFAULT_PRIORITY,
+    ActionKind,
+    Effect,
+    Policy,
+    Rule,
+    parse_action_kind,
+    parse_effect,
+)
 
 SUPPORTED_SCHEMA = 1
 """The only policy schema version this release understands."""
@@ -140,12 +148,9 @@ def _parse_effect(value: Any, *, where: str) -> Effect:
     if value is _MISSING:
         raise PolicyError(f"{where} is missing an 'effect' (allow, deny or review)")
     try:
-        return Effect(str(value).lower())
+        return parse_effect(value)
     except ValueError as exc:
-        allowed = ", ".join(effect.value for effect in Effect)
-        raise PolicyError(
-            f"{where} has unknown effect {value!r}; expected one of {allowed}"
-        ) from exc
+        raise PolicyError(f"{where} has {exc}") from exc
 
 
 def _parse_kinds(value: Any, *, where: str) -> frozenset[ActionKind]:
@@ -157,10 +162,7 @@ def _parse_kinds(value: Any, *, where: str) -> frozenset[ActionKind]:
     kinds: set[ActionKind] = set()
     for raw_kind in raw_kinds:
         try:
-            kinds.add(ActionKind(str(raw_kind).lower()))
+            kinds.add(parse_action_kind(raw_kind))
         except ValueError as exc:
-            allowed = ", ".join(kind.value for kind in ActionKind)
-            raise PolicyError(
-                f"{where} has unknown kind {raw_kind!r}; expected one of {allowed}"
-            ) from exc
+            raise PolicyError(f"{where} has {exc}") from exc
     return frozenset(kinds)

@@ -43,10 +43,12 @@ from .guards import (
     Reviewer,
 )
 from .journal import Journal
+from .policy.cases import load_cases, run_cases, summarise
 from .policy.engine import PolicyEngine
 from .policy.loader import load_policy
 from .policy.models import Action, ActionKind, Decision, Effect
 from .policy.presets import available_presets, load_preset
+from .report import dumps, html_report, sarif_report, transcript, transcript_json
 from .session import Session
 from .signing import (
     DEFAULT_KEY_DIR,
@@ -100,6 +102,17 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--json", action="store_true", help="print the decision as JSON")
     check.set_defaults(handler=_handle_policy_check)
 
+    test = policy_sub.add_parser(
+        "test",
+        help="run regression cases against a policy",
+        epilog=(
+            "example: sentinel policy test --policy standard --cases examples/cases/standard.toml"
+        ),
+    )
+    test.add_argument("--policy", required=True, help="preset name or path to a .toml file")
+    test.add_argument("--cases", required=True, help="a .toml file of [[case]] tables")
+    test.set_defaults(handler=_handle_policy_test)
+
     # --------------------------------------------------------------------- run
     run = subparsers.add_parser(
         "run",
@@ -127,6 +140,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--interactive",
         action="store_true",
         help="ask on the terminal before running a reviewed action",
+    )
+    run.add_argument(
+        "-c",
+        dest="command_line",
+        default=None,
+        metavar="COMMAND",
+        help="the command, in the form a shell is invoked with (sh -c)",
+    )
+    run.add_argument(
+        "--shell",
+        action="store_true",
+        help="marker for use as a Makefile SHELL; requires -c",
     )
     run.add_argument("command", nargs=argparse.REMAINDER, help="the command, after '--'")
     run.set_defaults(handler=_handle_run)
@@ -218,6 +243,33 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("--limit", type=int, default=20, help="how many trailing events (0 for all)")
     show.add_argument("--json", action="store_true", help="print raw records as JSON lines")
     show.set_defaults(handler=_handle_journal_show)
+
+    replay = journal_sub.add_parser(
+        "replay",
+        help="read the journal back as a transcript (read-only: nothing is executed)",
+        epilog=("example: sentinel journal replay .sentinel/session.jsonl --session 4d80186ae191"),
+    )
+    replay.add_argument("path")
+    replay.add_argument("--session", default=None, help="only this session id, or its prefix")
+    replay.add_argument("--json", action="store_true", help="print the transcript as JSON")
+    replay.add_argument("--anchors", default=None, metavar="PATH")
+    replay.add_argument("--key", default=None, metavar="PATH")
+    replay.set_defaults(handler=_handle_journal_replay)
+
+    export = journal_sub.add_parser(
+        "export",
+        help="write the journal out as HTML or SARIF",
+        epilog=(
+            "example: sentinel journal export .sentinel/session.jsonl "
+            "--format html --out report.html"
+        ),
+    )
+    export.add_argument("path")
+    export.add_argument("--format", required=True, choices=["html", "sarif"])
+    export.add_argument("--out", default=None, metavar="PATH", help="write here instead of stdout")
+    export.add_argument("--anchors", default=None, metavar="PATH")
+    export.add_argument("--key", default=None, metavar="PATH")
+    export.set_defaults(handler=_handle_journal_export)
 
     verify = journal_sub.add_parser("verify", help="check the hash chain")
     verify.add_argument("path")
@@ -452,12 +504,19 @@ def _handle_policy_check(args: argparse.Namespace) -> int:
     return _EFFECT_EXIT[decision.effect]
 
 
+def _handle_policy_test(args: argparse.Namespace) -> int:
+    engine = _resolve_engine(args.policy)
+    results = run_cases(engine, load_cases(args.cases))
+
+    for result in results:
+        print(result.render())
+    print()
+    print(f"{summarise(results)} against policy {engine.name}")
+    return EXIT_OK if all(result.ok for result in results) else EXIT_ERROR
+
+
 def _handle_run(args: argparse.Namespace) -> int:
-    command = list(args.command)
-    if command and command[0] == "--":
-        command = command[1:]
-    if not command:
-        raise SentinelError("no command given; put it after '--'")
+    command = _command_to_run(args)
     _require_terminal(args)
 
     engine = _resolve_engine(args.policy)
@@ -473,7 +532,7 @@ def _handle_run(args: argparse.Namespace) -> int:
             reviewer_note=INTERACTIVE_NOTE,
             timeout=args.timeout,
         )
-        result = runner.run(" ".join(command))
+        result = runner.run(command)
 
     _report(result, engine=engine, journal_path=args.journal, session=session)
     if result.stdout_preview:
@@ -481,6 +540,31 @@ def _handle_run(args: argparse.Namespace) -> int:
     if result.stderr_preview:
         sys.stderr.write(result.stderr_preview)
     return _exit_for(result, failed=bool(result.returncode))
+
+
+def _command_to_run(args: argparse.Namespace) -> str:
+    """The command line, from ``-c`` or from after ``--``. Exactly one of them.
+
+    The ``-c`` form is what a shell wrapper needs: Make invokes
+    ``$(SHELL) -c 'recipe'``, so pointing ``SHELL`` at ``sentinel run`` works
+    without touching a single recipe.
+    """
+    remainder = list(args.command)
+    if remainder and remainder[0] == "--":
+        remainder = remainder[1:]
+    inline = args.command_line
+
+    if inline is not None and remainder:
+        raise SentinelError("give the command either with -c or after '--', not both")
+    if args.shell and inline is None:
+        raise SentinelError(
+            "--shell marks this process as a shell wrapper, and a shell is always "
+            "invoked with -c; use --shell -c 'command'"
+        )
+    command = inline if inline is not None else " ".join(remainder)
+    if not command.strip():
+        raise SentinelError("no command given; use -c 'command' or '-- command'")
+    return command
 
 
 def _handle_write(args: argparse.Namespace) -> int:
@@ -658,6 +742,42 @@ def _handle_journal_verify(args: argparse.Namespace) -> int:
         report = journal.verify()
     print(report.render())
     return EXIT_OK if report.ok else EXIT_ERROR
+
+
+def _handle_journal_replay(args: argparse.Namespace) -> int:
+    journal = Journal(args.path)
+    key = public_key_from_file(args.key) if args.key else None
+    if key is not None and not args.anchors:
+        raise SentinelError("--key pins the signer of an anchor file, so it needs --anchors too")
+
+    if args.json:
+        payload = transcript_json(journal, session=args.session, anchors=args.anchors, key=key)
+        print(dumps(payload))
+    else:
+        print(transcript(journal, session=args.session, anchors=args.anchors, key=key))
+    return EXIT_OK
+
+
+def _handle_journal_export(args: argparse.Namespace) -> int:
+    journal = Journal(args.path)
+    key = public_key_from_file(args.key) if args.key else None
+    if key is not None and not args.anchors:
+        raise SentinelError("--key pins the signer of an anchor file, so it needs --anchors too")
+
+    if args.format == "html":
+        rendered = html_report(journal, anchors=args.anchors, key=key)
+    else:
+        rendered = dumps(sarif_report(journal, anchors=args.anchors, key=key))
+
+    if args.out:
+        try:
+            Path(args.out).write_text(rendered + "\n", encoding="utf-8")
+        except OSError as exc:
+            raise SentinelError(f"cannot write {args.out}: {exc}") from exc
+        print(f"wrote {args.format} report to {args.out}", file=sys.stderr)
+    else:
+        print(rendered)
+    return EXIT_OK
 
 
 def _handle_journal_anchor(args: argparse.Namespace) -> int:

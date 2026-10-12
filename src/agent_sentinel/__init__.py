@@ -54,11 +54,20 @@ from .guards import (
     GuardResult,
     NetworkResult,
 )
-from .journal import IntegrityIssue, Journal, VerifyReport, read_events, verify_file
+from .journal import IntegrityIssue, Journal, JournalScan, VerifyReport, read_events, verify_file
+from .policy.cases import Case, CaseResult, load_cases, run_cases, summarise
 from .policy.engine import PolicyEngine
 from .policy.loader import load_policy, parse_policy
 from .policy.models import Action, ActionKind, Decision, Effect, Policy, Rule
 from .policy.presets import PRESET_NAMES, available_presets, load_preset
+from .report import (
+    SessionBlock,
+    html_report,
+    sarif_report,
+    sessions,
+    transcript,
+    transcript_json,
+)
 from .session import Session, SessionInfo
 from .signing import (
     KeyPair,
@@ -83,6 +92,8 @@ __all__ = [
     "AnchorFile",
     "Approval",
     "ApprovalRequest",
+    "Case",
+    "CaseResult",
     "ConfigError",
     "Decision",
     "Effect",
@@ -101,6 +112,7 @@ __all__ = [
     "Journal",
     "JournalError",
     "JournalIntegrityError",
+    "JournalScan",
     "KeyPair",
     "NetworkResult",
     "Policy",
@@ -109,6 +121,7 @@ __all__ = [
     "Rule",
     "SentinelError",
     "Session",
+    "SessionBlock",
     "SessionInfo",
     "Signature",
     "SigningError",
@@ -121,6 +134,8 @@ __all__ = [
     "compare_anchors",
     "find_grant",
     "generate_keypair",
+    "html_report",
+    "load_cases",
     "load_policy",
     "load_preset",
     "parse_policy",
@@ -131,7 +146,13 @@ __all__ = [
     "read_events",
     "record_decision",
     "request_approval",
+    "run_cases",
+    "sarif_report",
+    "sessions",
     "sign_anchor",
+    "summarise",
+    "transcript",
+    "transcript_json",
     "verify_file",
     "verify_with_anchors",
     "write_keypair",

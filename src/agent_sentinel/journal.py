@@ -89,6 +89,20 @@ class VerifyReport:
         return "\n".join(lines)
 
 
+@dataclass(frozen=True)
+class JournalScan:
+    """What a tolerant read found: the records that could be read, and what could not."""
+
+    path: Path
+    events: tuple[Event, ...]
+    issues: tuple[IntegrityIssue, ...]
+
+    @property
+    def head_hash(self) -> str | None:
+        """The digest of the last readable record, if there is one."""
+        return self.events[-1].hash if self.events else None
+
+
 class Journal:
     """Read/write handle for one JSON Lines journal file."""
 
@@ -159,13 +173,18 @@ class Journal:
         return events[-count:] if count > 0 else []
 
     # --------------------------------------------------------------- verify
-    def verify(self) -> VerifyReport:
-        """Walk the whole chain and collect every integrity problem found."""
+    def scan(self) -> JournalScan:
+        """Walk the journal and collect problems instead of raising on them.
+
+        :meth:`iter_events` refuses to guess when a line is damaged, which is
+        right for reading but wrong for reporting: a damaged journal is exactly
+        when you most want something to look at. This walk keeps going and hands
+        back both halves, so a report can show what was readable and what was not.
+        """
+        events: list[Event] = []
         issues: list[IntegrityIssue] = []
         expected_seq = 1
         expected_prev = GENESIS_HASH
-        count = 0
-        head_hash: str | None = None
 
         for line_number, raw in self._iter_raw_lines():
             try:
@@ -174,7 +193,7 @@ class Journal:
                 issues.append(IntegrityIssue(kind="malformed", detail=str(exc), line=line_number))
                 continue
 
-            count += 1
+            events.append(event)
             if event.seq != expected_seq:
                 issues.append(
                     IntegrityIssue(
@@ -205,13 +224,17 @@ class Journal:
 
             expected_seq = event.seq + 1
             expected_prev = event.hash
-            head_hash = event.hash
 
+        return JournalScan(path=self.path, events=tuple(events), issues=tuple(issues))
+
+    def verify(self) -> VerifyReport:
+        """Walk the whole chain and collect every integrity problem found."""
+        scan = self.scan()
         return VerifyReport(
             path=self.path,
-            event_count=count,
-            head_hash=head_hash,
-            issues=tuple(issues),
+            event_count=len(scan.events),
+            head_hash=scan.head_hash,
+            issues=scan.issues,
         )
 
     # ---------------------------------------------------------------- internal
