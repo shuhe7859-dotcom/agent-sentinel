@@ -104,6 +104,8 @@ decision that authorises one execution of one action; see
 | `src/agent_sentinel/approvals.py` | Reading and writing approvals; scope, single use, expiry. |
 | `src/agent_sentinel/session.py` | Framing work with `session.start` / `session.end`. |
 | `src/agent_sentinel/report.py` | Reading a journal back: transcripts, HTML, SARIF. |
+| `src/agent_sentinel/tools.py` | The four guarded tools, as data and as a dispatcher. |
+| `src/agent_sentinel/mcp_server.py` | JSON-RPC over stdio, hand-written. |
 | `src/agent_sentinel/policy/cases.py` | Regression cases: actions and the verdicts they must get. |
 | `src/agent_sentinel/policy/models.py` | `Action`, `Rule`, `Policy`, `Decision`, `Effect`. |
 | `src/agent_sentinel/policy/loader.py` | TOML parsing and validation into the model. |
@@ -183,6 +185,11 @@ Implemented and covered by tests:
   before it is merged;
 * a tolerant scan that lets a report be produced about a damaged journal;
 * transcripts, self-contained HTML reports and SARIF for code scanning;
+* four guarded tools — `run_shell`, `write_file`, `delete_file`, `fetch_url` —
+  described once and handed out in either the MCP or the OpenAI shape, so an
+  agent can act without ever being given a way around the policy;
+* an MCP server written against the standard library alone, with the official
+  SDK used as a *test* client to prove a real implementation can drive it;
 * sessions that record the policy identity and a fingerprint of its content;
 * `reviewer` callbacks and `allow_review`, both of which leave a record saying
   who answered and why they were asked;
@@ -190,8 +197,8 @@ Implemented and covered by tests:
 
 Designed but not built yet (see [`roadmap.md`](roadmap.md)):
 
-* adapters for agent frameworks, and an MCP server that exposes the guards as
-  tools so a model cannot route around them.
+* everything on the backlog — YAML policies, a `sentinel doctor`, per-rule
+  counters, a documentation site.
 
 ## Where the constraints live
 

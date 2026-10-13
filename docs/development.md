@@ -7,6 +7,11 @@
 - Optional: [`uv`](https://docs.astral.sh/uv/) for faster environment handling
 
 There are no runtime dependencies. Everything in the `dev` extra is tooling.
+Two of them are worth explaining: `cryptography` powers the optional `sign`
+extra, and `mcp` is a **test client** for the hand-written server — the server
+itself speaks JSON-RPC over stdio with nothing but the standard library, and
+the interop test uses the official client to prove a real implementation
+agrees. Neither is imported at runtime.
 
 ## Setting up
 
@@ -127,4 +132,3 @@ as breaking, because journals outlive code.
 Open an issue with the policy (redacted), the command, and the journal excerpt
 around the problem. `sentinel journal verify` output is usually the fastest way
 to make a report actionable.
-

@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/tests-290%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-344%20passing-brightgreen.svg)](tests/)
 
 编码智能体会改动你的文件、执行你的命令、访问外部网络。由此引出两个问题，它们构成了
 这个项目的全部：
@@ -37,8 +37,8 @@ status:  awaiting_approval
 
 ## 当前状态
 
-早期但可用。记录格式、策略引擎、三个受控执行面、审批闭环、防篡改工具以及日志报告
-都已实现，并有 290 个测试覆盖。
+早期但可用。记录格式、策略引擎、三个受控执行面、审批闭环、防篡改工具、日志报告以及
+面向智能体的工具都已实现，并有 344 个测试覆盖。
 
 | 模块 | 状态 |
 | --- | --- |
@@ -57,8 +57,9 @@ status:  awaiting_approval
 | 策略回归用例，可直接进 CI | 已实现 |
 | `journal replay` 与 `journal export --format html\|sarif` | 已实现 |
 | `run -c`，可把 `sentinel` 当作 Makefile 的 `SHELL` | 已实现 |
+| MCP Server，把四个受控工具暴露给模型 | 已实现 |
+| OpenAI function-calling 形状的工具 schema | 已实现 |
 | `sentinel` 命令行与稳定退出码 | 已实现 |
-| MCP Server、框架适配器、日志回放 | 计划中（M4） |
 
 里程碑清单见 [`docs/roadmap.md`](docs/roadmap.md)。
 
@@ -237,6 +238,27 @@ test:
 `-c` 与 `--` 形式走的是同一条路径，所以审批、会话框架、退出码完全一致。被策略拒绝的
 recipe 会让构建失败——这正是目的。
 
+### 把工具交给智能体，而不是把 shell 交给它
+
+`sentinel mcp` 通过 MCP 暴露四个受控动作，模型能干活，但拿不到任何能绕过策略的东西：
+
+```json
+{
+  "mcpServers": {
+    "agent-sentinel": {
+      "command": "sentinel",
+      "args": ["mcp", "--policy", "standard",
+               "--journal", ".sentinel/mcp.jsonl", "--workspace", "."]
+    }
+  }
+}
+```
+
+工具只有 `run_shell`、`write_file`、`delete_file`、`fetch_url` 四个，没有别的路能碰到
+机器。被拒绝的调用会作为**结果**返回，带上规则与理由，模型可以转告用户；每一次调用都
+写进与命令行同一份日志。`sentinel tools --format openai` 会用函数调用框架期望的形状
+打印同一份描述。详见 [`docs/tools.md`](docs/tools.md)。
+
 ## 作为库使用
 
 ```python
@@ -326,6 +348,8 @@ reason   = "发布在本仓库是人的决定"
 | `sentinel journal export J --format html\|sarif [--out F] [--anchors A] [--key PUB]` | 导出报告，给人看或给代码扫描工具用 |
 | `sentinel journal note J "text"` | 追加一条人工批注 |
 | `sentinel journal anchor J [--file A] [--command CMD] [--note T] [--sign-with KEY]` | 把头部哈希写到日志够不着的地方 |
+| `sentinel mcp --policy P --journal J [--workspace W]` | 在 stdin/stdout 上用 MCP 提供受控工具 |
+| `sentinel tools [--format openai\|mcp]` | 打印可以交给智能体的工具 schema |
 | `sentinel keygen [--private P] [--public P] [--force]` | 生成用于签名锚点的 Ed25519 密钥对 |
 | `sentinel version` | 打印版本 |
 
@@ -356,6 +380,8 @@ agent-sentinel/
 │   ├── anchors.py           写到日志之外的头部哈希
 │   ├── signing.py           Ed25519 密钥与签名（可选依赖 sign）
 │   ├── report.py            文本经过、HTML 与 SARIF 报告
+│   ├── tools.py             四个受控工具：描述与派发
+│   ├── mcp_server.py        手写的 stdio JSON-RPC 服务
 │   ├── errors.py            异常体系
 │   ├── cli.py               sentinel 命令
 │   ├── policy/
@@ -384,6 +410,7 @@ agent-sentinel/
 │   ├── guards.md            三个执行面，以及每个守卫会拒绝什么
 │   ├── anchoring.md         截断、重写，以及签名到底证明了什么
 │   ├── reporting.md         日志回放与报告导出
+│   ├── tools.md             把受控工具交给智能体
 │   ├── event-schema.md      落盘记录格式
 │   ├── threat-model.md      防御什么、不防御什么
 │   ├── roadmap.md           里程碑
@@ -420,6 +447,7 @@ agent-sentinel **不是沙箱**。它决定是否启动一个进程，但不隔�
 | [`docs/guards.md`](docs/guards.md) | 正在接入某个守卫，或想知道某次写入为什么被拒 |
 | [`docs/anchoring.md`](docs/anchoring.md) | 想确认日志没有被人悄悄删掉一段 |
 | [`docs/reporting.md`](docs/reporting.md) | 想把日志读回来，或者交一份报告给别人 |
+| [`docs/tools.md`](docs/tools.md) | 正在把智能体接到受控工具上 |
 | [`docs/event-schema.md`](docs/event-schema.md) | 想脱离本库读日志，或要改动记录格式 |
 | [`docs/threat-model.md`](docs/threat-model.md) | 需要知道哪些在范围内、哪些不在 |
 | [`docs/development.md`](docs/development.md) | 正在搭环境、贡献代码或准备发版 |

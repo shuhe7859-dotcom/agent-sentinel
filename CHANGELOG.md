@@ -70,6 +70,20 @@ are still treated as breaking, because journals outlive code.
 - **`docs/anchoring.md`**, including an honest account of what anchoring cannot
   do: evidence nobody expected can still be deleted, and an anchor kept next to
   the journal does not stop someone with access to both.
+- **The guarded tools, for agents.** `run_shell`, `write_file`, `delete_file` and
+  `fetch_url` are described once and handed out in either the MCP shape or the
+  OpenAI function-calling shape, so a model can be given a way to act that *is*
+  the guardrail rather than something it has to go through.
+- **`sentinel mcp`**, a JSON-RPC 2.0 server over stdio implementing
+  `initialize`, `tools/list`, `tools/call` and `ping`. Hand-written, so the
+  runtime still imports only the standard library; the official SDK is a
+  development dependency used as a **test client**, and the interop test drives
+  the server with it rather than taking our word for compatibility.
+- **`sentinel tools --format openai|mcp`**, printing the schemas to hand a
+  framework, and `examples/function_calling.py` showing the whole loop offline.
+- **`ToolError`**, and a deliberately narrow argument checker covering only the
+  subset the tool schemas use. It says so, rather than implying it validates
+  arbitrary JSON Schema.
 - **`--interactive`** on `run`, `write`, `delete` and `fetch`: asks on the
   terminal before running a reviewed action, prompts on stderr so stdout stays
   the guarded command's, and treats anything but `y`/`yes` as no.

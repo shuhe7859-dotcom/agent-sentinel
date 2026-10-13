@@ -8,7 +8,7 @@ English | [简体中文](README.zh-CN.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/tests-290%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-344%20passing-brightgreen.svg)](tests/)
 
 A coding agent edits your files, runs your commands and talks to the network.
 Two questions follow, and together they are the whole project:
@@ -40,8 +40,8 @@ an actual action.
 ## Status
 
 Early, but working. The record format, the policy engine, all three guarded
-surfaces, the approval loop, the tamper-evidence toolkit and the reporting are
-implemented and covered by 290 tests.
+surfaces, the approval loop, the tamper-evidence toolkit, the reporting and the
+agent-facing tools are implemented and covered by 344 tests.
 
 | Area | State |
 | --- | --- |
@@ -60,8 +60,9 @@ implemented and covered by 290 tests.
 | Policy regression cases, runnable in CI | implemented |
 | `journal replay` and `journal export --format html\|sarif` | implemented |
 | `run -c`, so `sentinel` can be a Makefile `SHELL` | implemented |
+| An MCP server exposing the four guarded tools | implemented |
+| Tool schemas in the OpenAI function-calling shape | implemented |
 | `sentinel` CLI with stable exit codes | implemented |
-| MCP server, framework adapters, journal replay | planned (M4) |
 
 See [`docs/roadmap.md`](docs/roadmap.md) for the milestone list.
 
@@ -249,6 +250,30 @@ test:
 exit codes all behave identically. A recipe the policy denies fails the build,
 which is the point.
 
+### Give an agent the tools, not a shell
+
+`sentinel mcp` serves the four guarded actions over MCP, so a model can act
+without ever being handed something that can route around the policy:
+
+```json
+{
+  "mcpServers": {
+    "agent-sentinel": {
+      "command": "sentinel",
+      "args": ["mcp", "--policy", "standard",
+               "--journal", ".sentinel/mcp.jsonl", "--workspace", "."]
+    }
+  }
+}
+```
+
+The tools are `run_shell`, `write_file`, `delete_file` and `fetch_url` — nothing
+else reaches the machine. A refused call comes back as a result the model can
+explain, with the rule and the reason, and every call lands in the same journal
+the CLI writes. `sentinel tools --format openai` prints the same descriptions in
+the shape a function-calling framework expects. Read
+[`docs/tools.md`](docs/tools.md).
+
 ## Using the library
 
 ```python
@@ -340,6 +365,8 @@ project-specific policy is to copy it and narrow it.
 | `sentinel journal export J --format html\|sarif [--out F] [--anchors A] [--key PUB]` | Write a report, for a person or for a code-scanning tool. |
 | `sentinel journal note J "text"` | Append a human annotation. |
 | `sentinel journal anchor J [--file A] [--command CMD] [--note T] [--sign-with KEY]` | Write the head hash somewhere the journal cannot reach. |
+| `sentinel mcp --policy P --journal J [--workspace W]` | Serve the guarded tools over MCP on stdin and stdout. |
+| `sentinel tools [--format openai\|mcp]` | Print the tool schemas an agent can be given. |
 | `sentinel keygen [--private P] [--public P] [--force]` | Generate an Ed25519 key pair for signing anchors. |
 | `sentinel version` | Print the version. |
 
@@ -371,6 +398,8 @@ agent-sentinel/
 │   ├── anchors.py           head hashes written outside the journal
 │   ├── signing.py           Ed25519 key files and signatures (the sign extra)
 │   ├── report.py            transcripts, HTML and SARIF
+│   ├── tools.py             the four guarded tools, as data and as a dispatcher
+│   ├── mcp_server.py        JSON-RPC over stdio, hand-written
 │   ├── errors.py            exception hierarchy
 │   ├── cli.py               the `sentinel` command
 │   ├── policy/
@@ -399,6 +428,7 @@ agent-sentinel/
 │   ├── guards.md            the three surfaces and what each one refuses
 │   ├── anchoring.md         truncation, rewrites, and what a signature proves
 │   ├── reporting.md         replaying a journal and exporting a report
+│   ├── tools.md             giving an agent the guarded tools
 │   ├── event-schema.md      the on-disk record format
 │   ├── threat-model.md      what this defends against, and what it does not
 │   ├── roadmap.md           milestones
@@ -436,6 +466,7 @@ are written out in [`docs/threat-model.md`](docs/threat-model.md).
 | [`docs/guards.md`](docs/guards.md) | You are embedding a guard, or wondering why a write was refused. |
 | [`docs/anchoring.md`](docs/anchoring.md) | You want to know that nothing was quietly removed from a journal. |
 | [`docs/reporting.md`](docs/reporting.md) | You want to read a journal back, or hand someone a report. |
+| [`docs/tools.md`](docs/tools.md) | You are wiring an agent up to the guarded tools. |
 | [`docs/event-schema.md`](docs/event-schema.md) | You want to read a journal without this library, or change the format. |
 | [`docs/threat-model.md`](docs/threat-model.md) | You need to know what is in scope, and what is not. |
 | [`docs/development.md`](docs/development.md) | You are setting up, contributing, or releasing. |

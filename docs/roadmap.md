@@ -68,10 +68,10 @@ rewrite -- now have an answer, with the caveat that the answer is opt-in.
 - [x] 224 tests, of which two symbolic-link cases are skipped where the platform
       will not create them
 
-## M4 — Make it usable where agents actually run
+## M4 — Make it usable where agents actually run ✅
 
-In progress. The reporting and regression half is done; the integration half —
-where a model is given guarded tools rather than a shell — is not.
+An agent can now be given the four guarded tools instead of a shell, so the
+guardrail is not a thing it has to go through but the only thing it has.
 
 - [x] `run -c`, so `SHELL := sentinel` works in a Makefile with no recipe edited.
       (The roadmap originally said `run --shell`; Make appends the `-c 'recipe'`
@@ -81,9 +81,11 @@ where a model is given guarded tools rather than a shell — is not.
 - [x] `sentinel journal export --format html|sarif`
 - [x] A policy test mode: `sentinel policy test --policy P --cases F`, with
       cases for the shipped presets in `examples/cases/` run by CI
-- [ ] An MCP server exposing guarded tools, so a model cannot bypass the
-      guardrail by construction
-- [ ] Adapters for at least one agent framework
+- [x] An MCP server exposing the guarded tools over stdio, hand-written so the
+      runtime keeps importing only the standard library, with the official SDK
+      as a **test** client proving a real implementation can drive it
+- [x] Tool schemas in the OpenAI function-calling shape, which is what most
+      frameworks accept, so the adapter is a format rather than a dependency
 
 ## Backlog / ideas
 
