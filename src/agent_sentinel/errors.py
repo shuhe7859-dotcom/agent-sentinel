@@ -31,5 +31,9 @@ class SigningError(ConfigError):
     """A key could not be read, or a signature could not be produced."""
 
 
+class ToolError(SentinelError):
+    """A tool call cannot be carried out as asked: bad name or bad arguments."""
+
+
 class GuardError(SentinelError):
     """A guarded action could not be prepared or executed."""

@@ -1251,6 +1251,133 @@ def test_journal_export_rejects_a_key_without_anchors(
 
 
 # ----------------------------------------------------------------- run -c
+def _mcp_lines(*messages: dict[str, object]) -> list[str]:
+    return [json.dumps(message) for message in messages]
+
+
+def _run_mcp(tmp_path: Path, lines: list[str]) -> tuple[int, list[dict[str, object]]]:
+    """Start `sentinel mcp` as a client would and collect what it answers."""
+    env = {**os.environ, "PYTHONPATH": str(EXAMPLES.parent / "src")}
+    completed = subprocess.run(  # noqa: S603 - a fixed argv, no shell involved
+        [
+            sys.executable,
+            "-m",
+            "agent_sentinel",
+            "mcp",
+            "--policy",
+            "standard",
+            "--journal",
+            str(tmp_path / "mcp.jsonl"),
+            "--workspace",
+            str(tmp_path),
+        ],
+        input="\n".join(lines) + "\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+        check=False,
+    )
+    replies = [json.loads(line) for line in completed.stdout.splitlines() if line.strip()]
+    return completed.returncode, replies
+
+
+def test_tools_prints_the_openai_schemas(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["tools"]) == cli.EXIT_OK
+    printed = json.loads(capsys.readouterr().out)
+
+    assert {tool["function"]["name"] for tool in printed} == {
+        "run_shell",
+        "write_file",
+        "delete_file",
+        "fetch_url",
+    }
+
+
+def test_tools_can_print_the_mcp_schemas(capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["tools", "--format", "mcp"]) == cli.EXIT_OK
+    printed = json.loads(capsys.readouterr().out)
+
+    assert all("inputSchema" in tool for tool in printed)
+
+
+def test_mcp_answers_a_client_over_stdio(tmp_path: Path) -> None:
+    code, replies = _run_mcp(
+        tmp_path,
+        _mcp_lines(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {"jsonrpc": "2.0", "method": "notifications/initialized"},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {"name": "run_shell", "arguments": {"command": "echo over-stdio"}},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/call",
+                "params": {"name": "run_shell", "arguments": {"command": "rm -rf /"}},
+            },
+        ),
+    )
+
+    assert code == 0
+    # Three requests with ids, one notification that must not be answered.
+    assert [reply["id"] for reply in replies] == [1, 2, 3, 4]
+    assert replies[2]["result"]["isError"] is False
+    assert "over-stdio" in replies[2]["result"]["content"][0]["text"]
+    assert replies[3]["result"]["isError"] is True
+    assert "shell.rm-root" in replies[3]["result"]["content"][0]["text"]
+
+
+def test_mcp_stdout_carries_nothing_but_jsonrpc(tmp_path: Path) -> None:
+    """One stray print would be a parse error at the client."""
+    code, replies = _run_mcp(
+        tmp_path,
+        _mcp_lines({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+    )
+
+    assert code == 0
+    assert len(replies) == 1
+    assert all(reply["jsonrpc"] == "2.0" for reply in replies)
+
+
+def test_mcp_carries_non_ascii_both_ways(tmp_path: Path) -> None:
+    """Windows text streams default to the console code page; the server says UTF-8."""
+    code, replies = _run_mcp(
+        tmp_path,
+        _mcp_lines(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "write_file",
+                    "arguments": {"path": "笔记.md", "content": "你好世界"},
+                },
+            }
+        ),
+    )
+
+    assert code == 0
+    assert replies[0]["result"]["isError"] is False
+    assert "笔记.md" in replies[0]["result"]["content"][0]["text"]
+    assert (tmp_path / "笔记.md").read_text(encoding="utf-8") == "你好世界"
+
+
+def test_mcp_records_the_session_it_ran_in(tmp_path: Path) -> None:
+    _run_mcp(
+        tmp_path,
+        _mcp_lines({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+    )
+
+    events = Journal(tmp_path / "mcp.jsonl").read()
+    assert [event.type.value for event in events] == ["session.start", "session.end"]
+    assert events[0].payload["policy"] == "standard"
+
+
 def test_run_accepts_the_form_a_shell_uses(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

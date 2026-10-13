@@ -41,6 +41,10 @@ dev = [
   "pre-commit>=4.0",
   "build>=1.2",
   "cryptography>=43",
+  # The MCP SDK is a development dependency only. The server speaks JSON-RPC
+  # over stdio with nothing but the standard library; the SDK is here so the
+  # interop test can point a real client at it.
+  "mcp>=1.0",
 ]
 sign = ["cryptography>=43"]
 

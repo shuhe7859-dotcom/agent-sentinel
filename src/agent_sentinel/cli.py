@@ -43,6 +43,7 @@ from .guards import (
     Reviewer,
 )
 from .journal import Journal
+from .mcp_server import McpServer, use_utf8_stdio
 from .policy.cases import load_cases, run_cases, summarise
 from .policy.engine import PolicyEngine
 from .policy.loader import load_policy
@@ -58,6 +59,7 @@ from .signing import (
     public_key_from_file,
     write_keypair,
 )
+from .tools import SentinelTools, openai_tools, tool_specs
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -322,6 +324,28 @@ def build_parser() -> argparse.ArgumentParser:
     version = subparsers.add_parser("version", help="print the version")
     version.set_defaults(handler=_handle_version)
 
+    # ------------------------------------------------------------------- tools
+    mcp = subparsers.add_parser(
+        "mcp",
+        help="serve the guarded tools over MCP on stdin and stdout",
+        epilog=(
+            "example: sentinel mcp --policy standard --journal .sentinel/mcp.jsonl --workspace ."
+        ),
+    )
+    _add_guard_arguments(mcp, interactive=False)
+    mcp.add_argument("--cwd", default=None, help="working directory for shell commands")
+    mcp.add_argument("--timeout", type=float, default=None, help="seconds before giving up")
+    mcp.add_argument(
+        "--max-bytes", type=int, default=DEFAULT_MAX_BYTES, help="how much of a body to read"
+    )
+    mcp.set_defaults(handler=_handle_mcp)
+
+    tools_command = subparsers.add_parser(
+        "tools", help="print the tool schemas an agent can be given"
+    )
+    tools_command.add_argument("--format", default="openai", choices=["openai", "mcp"])
+    tools_command.set_defaults(handler=_handle_tools)
+
     keygen = subparsers.add_parser(
         "keygen",
         help="generate an Ed25519 key pair for signing anchors",
@@ -346,7 +370,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # ------------------------------------------------------------------ handlers
-def _add_guard_arguments(parser: argparse.ArgumentParser) -> None:
+def _add_guard_arguments(parser: argparse.ArgumentParser, *, interactive: bool = True) -> None:
     """The options that every guarded action shares."""
     parser.add_argument("--policy", required=True, help="preset name or path to a .toml file")
     parser.add_argument("--journal", required=True, help="journal file to append to")
@@ -361,11 +385,12 @@ def _add_guard_arguments(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="treat 'review' as 'allow' (records the decision either way)",
     )
-    review.add_argument(
-        "--interactive",
-        action="store_true",
-        help="ask on the terminal before running a reviewed action",
-    )
+    if interactive:
+        review.add_argument(
+            "--interactive",
+            action="store_true",
+            help="ask on the terminal before running a reviewed action",
+        )
 
 
 INTERACTIVE_NOTE = "answered at the terminal"
@@ -467,6 +492,34 @@ def _exit_for(result: GuardResult, *, failed: bool = False) -> int:
 def _handle_version(args: argparse.Namespace) -> int:
     print(f"agent-sentinel {__version__}")
     return EXIT_OK
+
+
+def _handle_tools(args: argparse.Namespace) -> int:
+    if args.format == "openai":
+        print(dumps(openai_tools()))
+    else:
+        print(dumps([spec.mcp() for spec in tool_specs()]))
+    return EXIT_OK
+
+
+def _handle_mcp(args: argparse.Namespace) -> int:
+    engine = _resolve_engine(args.policy)
+    journal = Journal(args.journal)
+    workspace = _workspace_of(args)
+    tools = SentinelTools(
+        engine,
+        journal,
+        workspace=workspace,
+        cwd=args.cwd,
+        allow_review=args.allow_review,
+        timeout=args.timeout,
+        max_bytes=args.max_bytes,
+    )
+    server = McpServer(tools)
+
+    use_utf8_stdio()
+    with Session(engine, journal, cwd=args.cwd, workspace=str(workspace)):
+        return server.serve(sys.stdin, sys.stdout)
 
 
 def _handle_keygen(args: argparse.Namespace) -> int:

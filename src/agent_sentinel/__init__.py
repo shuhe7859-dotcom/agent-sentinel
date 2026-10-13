@@ -41,6 +41,7 @@ from .errors import (
     PolicyError,
     SentinelError,
     SigningError,
+    ToolError,
 )
 from .events import GENESIS_HASH, Actor, Event, EventType
 from .guards import (
@@ -55,6 +56,7 @@ from .guards import (
     NetworkResult,
 )
 from .journal import IntegrityIssue, Journal, JournalScan, VerifyReport, read_events, verify_file
+from .mcp_server import PROTOCOL_VERSIONS, McpServer, use_utf8_stdio
 from .policy.cases import Case, CaseResult, load_cases, run_cases, summarise
 from .policy.engine import PolicyEngine
 from .policy.loader import load_policy, parse_policy
@@ -77,11 +79,19 @@ from .signing import (
     public_key_from_file,
     write_keypair,
 )
+from .tools import (
+    SentinelTools,
+    ToolResult,
+    ToolSpec,
+    openai_tools,
+    tool_specs,
+)
 
 __all__ = [
     "ANCHOR_SCHEMA_VERSION",
     "GENESIS_HASH",
     "PRESET_NAMES",
+    "PROTOCOL_VERSIONS",
     "SOURCE_CALLBACK",
     "SOURCE_CONFIG",
     "SOURCE_OPERATOR",
@@ -114,17 +124,22 @@ __all__ = [
     "JournalIntegrityError",
     "JournalScan",
     "KeyPair",
+    "McpServer",
     "NetworkResult",
     "Policy",
     "PolicyEngine",
     "PolicyError",
     "Rule",
     "SentinelError",
+    "SentinelTools",
     "Session",
     "SessionBlock",
     "SessionInfo",
     "Signature",
     "SigningError",
+    "ToolError",
+    "ToolResult",
+    "ToolSpec",
     "VerifyReport",
     "__version__",
     "anchor_journal",
@@ -138,6 +153,7 @@ __all__ = [
     "load_cases",
     "load_policy",
     "load_preset",
+    "openai_tools",
     "parse_policy",
     "pending_requests",
     "private_key_from_file",
@@ -151,8 +167,10 @@ __all__ = [
     "sessions",
     "sign_anchor",
     "summarise",
+    "tool_specs",
     "transcript",
     "transcript_json",
+    "use_utf8_stdio",
     "verify_file",
     "verify_with_anchors",
     "write_keypair",
