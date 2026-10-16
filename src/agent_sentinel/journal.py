@@ -17,12 +17,15 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterator, Mapping
+from contextlib import AbstractContextManager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .errors import JournalIntegrityError
 from .events import GENESIS_HASH, Actor, Event, EventType, canonical_dumps
+from .locking import journal_lock
 
 _READ_CHUNK = 4096
 
@@ -108,6 +111,11 @@ class Journal:
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
+        self.session: ContextVar[str | None] = ContextVar("journal_session", default=None)
+
+    def locked(self) -> AbstractContextManager[None]:
+        """Serialize appends and approval claims across threads and processes."""
+        return journal_lock(self.path)
 
     # ------------------------------------------------------------------ write
     def append(
@@ -117,21 +125,25 @@ class Journal:
         payload: Mapping[str, Any] | None = None,
     ) -> Event:
         """Seal a new event onto the end of the chain and flush it to disk."""
-        head = self.head()
-        event = Event.create(
-            seq=head.seq + 1 if head else 1,
-            type=event_type,
-            actor=actor,
-            payload=payload,
-            prev_hash=head.hash if head else GENESIS_HASH,
-        )
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8", newline="\n") as handle:
-            handle.write(canonical_dumps(event.to_record()))
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        return event
+        with self.locked():
+            payload = dict(payload or {})
+            if self.session.get() is not None:
+                payload.setdefault("session_id", self.session.get())
+            head = self.head()
+            event = Event.create(
+                seq=head.seq + 1 if head else 1,
+                type=event_type,
+                actor=actor,
+                payload=payload,
+                prev_hash=head.hash if head else GENESIS_HASH,
+            )
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with self.path.open("a", encoding="utf-8", newline="\n") as handle:
+                handle.write(canonical_dumps(event.to_record()))
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            return event
 
     def note(self, message: str, *, actor: Actor = Actor.HUMAN) -> Event:
         """Append a free-form annotation."""

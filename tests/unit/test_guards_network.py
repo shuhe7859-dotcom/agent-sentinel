@@ -15,7 +15,6 @@ from agent_sentinel.guards.network import GuardedNetwork, host_of
 from agent_sentinel.journal import Journal
 from agent_sentinel.policy.engine import PolicyEngine
 from agent_sentinel.policy.loader import parse_policy
-from agent_sentinel.policy.models import Action, ActionKind
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from conftest import LocalServer
@@ -126,7 +125,7 @@ def test_a_reviewed_host_waits_for_a_human_then_goes(tmp_path: Path, server: Loc
 
     record_decision(
         journal,
-        action=Action(kind=ActionKind.NETWORK, target=server.host),
+        action=first.decision.action,
         granted=True,
         source=SOURCE_OPERATOR,
     )

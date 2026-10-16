@@ -21,7 +21,7 @@ from __future__ import annotations
 import hashlib
 import posixpath
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -192,10 +192,29 @@ class GuardedFileSystem(Guard[FileSystemResult]):
             "resolved": resolved.as_posix(),
             "containment": INSIDE if relative is not None else OUTSIDE,
         }
+        metadata["before"] = self._file_state(resolved) if relative is not None else "outside"
         if relative is not None:
             metadata["relative"] = relative
         metadata.update(extra)
         return Action(kind=kind, target=given, metadata=metadata)
+
+    @staticmethod
+    def _file_state(path: Path) -> str:
+        if not path.exists():
+            return "missing"
+        if not path.is_file():
+            return "not-a-file"
+        with path.open("rb") as handle:
+            return "sha256:" + hashlib.file_digest(handle, "sha256").hexdigest()
+
+    def _refresh(self, action: Action) -> Action:
+        extra = {
+            key: value
+            for key, value in action.metadata.items()
+            if key not in {"before", "workspace", "resolved", "relative", "containment"}
+        }
+        refreshed = self._describe(action.kind, action.target, extra)
+        return replace(refreshed, action_id=action.action_id, session_id=action.session_id)
 
     def _resolve(self, path: str | Path) -> Path:
         """Resolve a target against the workspace, following symbolic links."""

@@ -45,6 +45,7 @@ from .guards import (
 from .journal import Journal
 from .mcp_server import McpServer, use_utf8_stdio
 from .policy.cases import load_cases, run_cases, summarise
+from .policy.compare import compare_journal, comparison_html, comparison_text
 from .policy.engine import PolicyEngine
 from .policy.loader import load_policy
 from .policy.models import Action, ActionKind, Decision, Effect
@@ -114,6 +115,18 @@ def build_parser() -> argparse.ArgumentParser:
     test.add_argument("--policy", required=True, help="preset name or path to a .toml file")
     test.add_argument("--cases", required=True, help="a .toml file of [[case]] tables")
     test.set_defaults(handler=_handle_policy_test)
+
+    compare = policy_sub.add_parser(
+        "compare", help="compare two policies without executing journal actions"
+    )
+    compare.add_argument("--journal", required=True)
+    compare.add_argument("--old", required=True, help="old policy preset or TOML path")
+    compare.add_argument("--new", required=True, help="new policy preset or TOML path")
+    compare.add_argument("--format", choices=["text", "json", "html"], default="text")
+    compare.add_argument("--out", default=None)
+    compare.add_argument("--anchors", default=None)
+    compare.add_argument("--key", default=None)
+    compare.set_defaults(handler=_handle_policy_compare)
 
     # --------------------------------------------------------------------- run
     run = subparsers.add_parser(
@@ -209,9 +222,7 @@ def build_parser() -> argparse.ArgumentParser:
         "approve",
         help="record an approval, or a refusal, for an action that was reviewed",
         epilog=(
-            "example: sentinel approve .sentinel/session.jsonl --request-seq 12\n"
-            "         sentinel approve .sentinel/session.jsonl --command 'git push --force' "
-            "--expires-in 30"
+            "example: sentinel approve .sentinel/session.jsonl --request-seq 12 --expires-in 30"
         ),
     )
     approve.add_argument("journal", help="journal file to append to")
@@ -219,7 +230,9 @@ def build_parser() -> argparse.ArgumentParser:
     approve_source.add_argument(
         "--request-seq", type=int, help="approve the escalation with this seq number"
     )
-    approve_source.add_argument("--command", help="approve this command line directly")
+    approve_source.add_argument(
+        "--command", help="obsolete: rejected; use --request-seq to bind execution context"
+    )
     approve.add_argument(
         "--kind", default=ActionKind.SHELL.value, choices=[kind.value for kind in ActionKind]
     )
@@ -420,6 +433,7 @@ def _interactive_reviewer(args: argparse.Namespace) -> Reviewer | None:
     def ask(action: Action, decision: Decision) -> bool:
         # The prompt goes to stderr: stdout may be carrying the command's output.
         print(f"{decision.rule_id or '(policy default)'}: {decision.reason}", file=sys.stderr)
+        print("execution context: " + canonical_dumps(action.approval_context()), file=sys.stderr)
         print(
             f"  run {action.kind.value} {action.subject}? [y/N] ",
             end="",
@@ -726,6 +740,8 @@ def _write_payload(args: argparse.Namespace) -> bytes:
 
 def _handle_approve(args: argparse.Namespace) -> int:
     journal = Journal(args.journal)
+    if not journal.verify().ok:
+        raise SentinelError("cannot approve a damaged journal")
     action = _resolve_approved_action(journal, args)
     event = record_decision(
         journal,
@@ -748,10 +764,20 @@ def _handle_approve(args: argparse.Namespace) -> int:
 def _resolve_approved_action(journal: Journal, args: argparse.Namespace) -> Action:
     """Turn ``--request-seq`` or ``--command`` into the action being approved."""
     if args.request_seq is None:
-        return Action(kind=ActionKind(args.kind), target=args.command)
+        raise SentinelError("--command pre-approval is no longer supported; use --request-seq")
     for request in approval_requests(journal):
         if request.seq == args.request_seq:
-            return Action(kind=ActionKind(request.kind), target=request.command)
+            if request.context_version != 2:
+                raise SentinelError(
+                    "legacy request lacks execution context; run the action to request approval again"
+                )
+            try:
+                action = Action.from_dict(request.action)
+            except ValueError as exc:
+                raise SentinelError(f"invalid approval request context: {exc}") from exc
+            if action.fingerprint() != request.fingerprint:
+                raise SentinelError("approval request context does not match its fingerprint")
+            return action
     raise SentinelError(f"{args.journal}: no approval request recorded as #{args.request_seq}")
 
 
@@ -808,6 +834,43 @@ def _handle_journal_replay(args: argparse.Namespace) -> int:
         print(dumps(payload))
     else:
         print(transcript(journal, session=args.session, anchors=args.anchors, key=key))
+    return EXIT_OK
+
+
+def _handle_policy_compare(args: argparse.Namespace) -> int:
+    key = public_key_from_file(args.key) if args.key else None
+    result = compare_journal(
+        Journal(args.journal),
+        _resolve_engine(args.old),
+        _resolve_engine(args.new),
+        anchors=args.anchors,
+        key=key,
+    )
+    rendered = (
+        dumps(result)
+        if args.format == "json"
+        else comparison_html(result)
+        if args.format == "html"
+        else comparison_text(result)
+    )
+    if args.out:
+        output = Path(args.out).resolve()
+        protected = [args.journal, args.anchors, args.key, args.old, args.new]
+        if any(
+            value
+            and (
+                output == Path(value).resolve()
+                or (output.exists() and Path(value).exists() and output.samefile(value))
+            )
+            for value in protected
+        ):
+            raise SentinelError("report output must not overwrite an input file")
+        try:
+            output.write_text(rendered + "\n", encoding="utf-8")
+        except OSError as exc:
+            raise SentinelError(f"cannot write {args.out}: {exc}") from exc
+    else:
+        print(rendered)
     return EXIT_OK
 
 

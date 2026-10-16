@@ -97,14 +97,12 @@ class GuardedShell(Guard[GuardedResult]):
             reviewer=reviewer,
             reviewer_note=reviewer_note,
         )
-        self.cwd = str(cwd) if cwd is not None else None
+        self.cwd = str(Path(cwd or ".").expanduser().resolve())
         self.timeout = timeout
 
     def run(self, command: str, *, timeout: float | None = None) -> GuardedResult:
         """Evaluate ``command``, run it if permitted, and record the outcome."""
-        metadata: dict[str, Any] = {}
-        if timeout is not None:
-            metadata["timeout_s"] = timeout
+        metadata: dict[str, Any] = {"timeout_s": self.timeout if timeout is None else timeout}
         action = Action(kind=ActionKind.SHELL, target=command, cwd=self.cwd, metadata=metadata)
         return self.guard(action, self._run_command)
 

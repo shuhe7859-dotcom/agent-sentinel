@@ -16,7 +16,7 @@ from agent_sentinel.guards.shell import GuardedRunner
 from agent_sentinel.journal import Journal
 from agent_sentinel.policy.engine import PolicyEngine
 from agent_sentinel.policy.loader import parse_policy
-from agent_sentinel.policy.models import Action, ActionKind, Decision
+from agent_sentinel.policy.models import Action, Decision
 from agent_sentinel.policy.presets import load_preset
 
 
@@ -113,7 +113,8 @@ def test_a_reviewed_command_stops_and_is_escalated(tmp_path: Path) -> None:
 
 def test_a_recorded_grant_lets_the_command_run(tmp_path: Path) -> None:
     journal = _journal(tmp_path)
-    action = Action(kind=ActionKind.SHELL, target="echo hello")
+    requested = GuardedRunner(_engine(effect="review"), journal).run("echo hello")
+    action = requested.decision.action
     grant = record_decision(journal, action=action, granted=True, source=SOURCE_OPERATOR)
 
     result = GuardedRunner(_engine(effect="review"), journal).run("echo hello")
@@ -126,7 +127,8 @@ def test_a_recorded_grant_lets_the_command_run(tmp_path: Path) -> None:
 
 def test_a_grant_is_consumed_by_the_run_that_used_it(tmp_path: Path) -> None:
     journal = _journal(tmp_path)
-    action = Action(kind=ActionKind.SHELL, target="echo hello")
+    requested = GuardedRunner(_engine(effect="review"), journal).run("echo hello")
+    action = requested.decision.action
     record_decision(journal, action=action, granted=True, source=SOURCE_OPERATOR)
     runner = GuardedRunner(_engine(effect="review"), journal)
 
@@ -139,7 +141,8 @@ def test_a_grant_is_consumed_by_the_run_that_used_it(tmp_path: Path) -> None:
 
 def test_a_grant_for_one_command_does_not_cover_another(tmp_path: Path) -> None:
     journal = _journal(tmp_path)
-    action = Action(kind=ActionKind.SHELL, target="echo hello")
+    requested = GuardedRunner(_engine(effect="review"), journal).run("echo hello")
+    action = requested.decision.action
     record_decision(journal, action=action, granted=True, source=SOURCE_OPERATOR)
 
     result = GuardedRunner(_engine(effect="review"), journal).run("echo goodbye")
@@ -184,7 +187,8 @@ def test_a_reviewer_callback_can_refuse(tmp_path: Path) -> None:
 
 def test_a_callback_is_not_consulted_when_a_grant_already_exists(tmp_path: Path) -> None:
     journal = _journal(tmp_path)
-    action = Action(kind=ActionKind.SHELL, target="echo hello")
+    requested = GuardedRunner(_engine(effect="review"), journal).run("echo hello")
+    action = requested.decision.action
     record_decision(journal, action=action, granted=True, source=SOURCE_OPERATOR)
 
     def reviewer(action: Action, decision: Decision) -> bool:

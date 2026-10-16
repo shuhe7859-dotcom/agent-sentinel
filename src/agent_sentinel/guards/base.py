@@ -25,10 +25,12 @@ in the caller's hands, not in a log that is meant to be shareable.
 
 from __future__ import annotations
 
+import copy
 import time
+import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Generic, TypeVar
 
 from ..approvals import (
@@ -37,6 +39,7 @@ from ..approvals import (
     Approval,
     ApprovalRequest,
     approval_from_event,
+    claim_grant,
     find_grant,
     record_decision,
     request_approval,
@@ -162,6 +165,7 @@ class Guard(ABC, Generic[ResultT]):
     # ------------------------------------------------------------------ public
     def guard(self, action: Action, perform: Performer) -> ResultT:
         """Take ``action`` all the way through, calling ``perform`` if permitted."""
+        action = self._prepare(action)
         self.journal.append(EventType.ACTION_PROPOSED, Actor.AGENT, action.as_dict())
 
         decision = self._constrain(action, self.engine.evaluate(action))
@@ -181,6 +185,24 @@ class Guard(ABC, Generic[ResultT]):
             return self._act(action, decision, perform, approval.seq)
 
         return self._act(action, decision, perform, None)
+
+    def _prepare(self, action: Action) -> Action:
+        metadata = copy.deepcopy(dict(action.metadata))
+        metadata["policy_fingerprint"] = self.engine.policy.fingerprint()
+        return replace(
+            action,
+            metadata=metadata,
+            action_id=uuid.uuid4().hex,
+            session_id=self.journal.session.get(),
+        )
+
+    def _refresh(self, action: Action) -> Action:
+        """Recheck mutable execution context immediately before claiming approval."""
+        return action
+
+    @staticmethod
+    def _links(action: Action) -> dict[str, Any]:
+        return {"action_id": action.action_id, "session_id": action.session_id}
 
     # ------------------------------------------------------------------- hooks
     @abstractmethod
@@ -212,6 +234,7 @@ class Guard(ABC, Generic[ResultT]):
     # ---------------------------------------------------------------- internals
     def _decision_payload(self, action: Action, decision: Decision) -> dict[str, Any]:
         payload: dict[str, Any] = {
+            **self._links(action),
             "effect": decision.effect.value,
             "rule": decision.rule_id,
             "reason": decision.reason,
@@ -268,6 +291,7 @@ class Guard(ABC, Generic[ResultT]):
                 request_approval(self.journal, action=action, decision=decision)
             )
         payload: dict[str, Any] = {
+            **self._links(action),
             "status": status,
             "rule": decision.rule_id,
             "reason": decision.reason,
@@ -283,8 +307,39 @@ class Guard(ABC, Generic[ResultT]):
         perform: Performer,
         approval_seq: int | None,
     ) -> ResultT:
+        refreshed = self._refresh(action)
+        if refreshed.fingerprint() != action.fingerprint():
+            self._refuse(action, decision, "awaiting_approval")
+            refreshed = self._prepare(refreshed)
+            self.journal.append(EventType.ACTION_PROPOSED, Actor.AGENT, refreshed.as_dict())
+            changed = self._constrain(
+                refreshed,
+                Decision(
+                    effect=Effect.REVIEW,
+                    action=refreshed,
+                    rule_id=None,
+                    reason="execution context changed; a new approval is required",
+                    policy=decision.policy,
+                ),
+            )
+            self.journal.append(
+                EventType.POLICY_DECISION,
+                Actor.SENTINEL,
+                self._decision_payload(refreshed, changed),
+            )
+            return self._refuse(
+                refreshed,
+                changed,
+                "denied" if changed.effect is Effect.DENY else "awaiting_approval",
+                escalate=changed.effect is not Effect.DENY,
+            )
+        if approval_seq is not None:
+            claimed = claim_grant(self.journal, action)
+            if claimed is None:
+                return self._refuse(action, decision, "awaiting_approval", escalate=True)
+            approval_seq = claimed.seq
         started = time.perf_counter()
-        recorded = dict(self._context(action, decision))
+        recorded = {**self._context(action, decision), **self._links(action)}
         private: Mapping[str, Any] = {}
         try:
             outcome = perform(action)

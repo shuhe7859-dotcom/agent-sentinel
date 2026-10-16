@@ -8,7 +8,7 @@ English | [简体中文](README.zh-CN.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/tests-344%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-370%20passing-brightgreen.svg)](tests/)
 
 A coding agent edits your files, runs your commands and talks to the network.
 Two questions follow, and together they are the whole project:
@@ -27,6 +27,25 @@ status:  awaiting_approval
 
 The refusal is recorded, too. A blocked attempt is evidence.
 
+## Context-bound approvals and counterfactual experiments
+
+Approvals bind the effective policy and exact execution context: shell directory and
+timeout, file pre/post-content digests, and HTTP request parameters. A durable atomic
+claim precedes execution; a crash leaves the grant consumed and the result unknown.
+Historical logs remain readable/verifiable, but historical unbound approvals require
+a fresh request. `approve --command` is rejected; use `--request-seq`.
+
+```console
+python examples/evidence_demo.py
+sentinel policy compare --journal .sentinel/session.jsonl --old standard --new strict --format html --out comparison.html
+```
+
+The demo prints a standalone `index.html` with approval-context changes, policy
+comparison, a 14-case labelled teaching experiment, and tamper detection. Comparison
+never executes journal actions. Unlabelled journals report differences, not accuracy.
+Reports are offline HTML with no scripts or external assets. See
+[approvals](docs/approvals.md) and [reporting](docs/reporting.md).
+
 ## Two pillars, nothing else
 
 | Pillar | Question | Module |
@@ -41,7 +60,7 @@ an actual action.
 
 Early, but working. The record format, the policy engine, all three guarded
 surfaces, the approval loop, the tamper-evidence toolkit, the reporting and the
-agent-facing tools are implemented and covered by 344 tests.
+agent-facing tools are implemented and covered by 370 passing tests.
 
 | Area | State |
 | --- | --- |

@@ -7,23 +7,24 @@ answers. An approval is therefore:
 * **auditable** -- the journal shows who approved what, and when;
 * **scoped to one action** -- the fingerprint covers the command, so approving
   ``git push --force origin main`` does not also approve the next force push;
-* **single use** -- the execution records which approval it consumed, so one yes
-  cannot authorise two runs;
+* **single use** -- a durable claim reserves approval before execution, so one
+  yes cannot authorise two runs;
 * **able to expire** -- an approval may carry a deadline after which it stops
   counting.
 
-None of this is a lock. It is a record that the runner consults and that a human
-reads afterwards, from the same file.
+Claims are serialized with cooperating journal writers. This is not process
+isolation: commands executed outside the guards remain outside this protocol.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from .events import Actor, Event, EventType
+from .errors import JournalIntegrityError
+from .events import Actor, Event, EventType, canonical_dumps
 from .journal import Journal
 from .policy.models import Action, Decision
 
@@ -48,10 +49,20 @@ class ApprovalRequest:
     command: str
     rule_id: str | None = None
     reason: str = ""
+    context_version: int = 0
+    action: Mapping[str, Any] = field(default_factory=dict)
 
     def render(self) -> str:
         rule = self.rule_id or "(policy default)"
-        return f"#{self.seq:<4} {self.kind:<11} {self.command}\n        {rule}: {self.reason}"
+        context = (
+            canonical_dumps(self.action)
+            if self.context_version == 2
+            else "legacy context unavailable; request again"
+        )
+        return (
+            f"#{self.seq:<4} {self.kind:<11} {self.command}\n        {rule}: {self.reason}"
+            f"\n        execution context: {context}"
+        )
 
 
 @dataclass(frozen=True)
@@ -69,6 +80,7 @@ class Approval:
     note: str = ""
     request_seq: int | None = None
     expires_at: str | None = None
+    context_version: int = 0
     consumed_by: int | None = None
     """Seq of the ``action.result`` that used this approval, if any."""
 
@@ -81,7 +93,12 @@ class Approval:
 
     def is_usable(self, *, now: datetime | None = None) -> bool:
         """True when this approval can still authorise an execution."""
-        return self.granted and self.consumed_by is None and not self.is_expired(now=now)
+        return (
+            self.context_version == 2
+            and self.granted
+            and self.consumed_by is None
+            and not self.is_expired(now=now)
+        )
 
     def render(self) -> str:
         verdict = "granted" if self.granted else "refused"
@@ -104,6 +121,7 @@ def request_approval(journal: Journal, *, action: Action, decision: Decision) ->
         EventType.APPROVAL_REQUESTED,
         Actor.SENTINEL,
         {
+            **approval_payload(action),
             "fingerprint": action.fingerprint(),
             "kind": action.kind.value,
             "command": action.subject,
@@ -142,6 +160,7 @@ def record_decision(
         actor,
         {
             "granted": granted,
+            **approval_payload(action),
             "fingerprint": action.fingerprint(),
             "kind": action.kind.value,
             "command": action.subject,
@@ -183,6 +202,8 @@ def request_from_event(event: Event) -> ApprovalRequest:
         command=_text(payload, "command"),
         rule_id=_optional_text(payload, "rule"),
         reason=_text(payload, "reason"),
+        context_version=_optional_int(payload, "context_version") or 0,
+        action=payload.get("action", {}) if isinstance(payload.get("action", {}), dict) else {},
     )
 
 
@@ -202,6 +223,7 @@ def approval_from_event(event: Event, *, consumed_by: int | None = None) -> Appr
         request_seq=_optional_int(payload, "request_seq"),
         expires_at=_optional_text(payload, "expires_at"),
         consumed_by=consumed_by,
+        context_version=_optional_int(payload, "context_version") or 0,
     )
 
 
@@ -209,7 +231,7 @@ def consumed_approval_seqs(journal: Journal) -> dict[int, int]:
     """Map approval seq to the ``action.result`` seq that consumed it."""
     consumed: dict[int, int] = {}
     for event in journal.iter_events():
-        if event.type is not EventType.ACTION_RESULT:
+        if event.type not in {EventType.ACTION_RESULT, EventType.APPROVAL_CLAIMED}:
             continue
         approval_seq = event.payload.get("approval_seq")
         if isinstance(approval_seq, int) and not isinstance(approval_seq, bool):
@@ -274,3 +296,34 @@ def _optional_int(payload: Mapping[str, Any], key: str) -> int | None:
     if isinstance(value, int) and not isinstance(value, bool):
         return value
     return None
+
+
+def approval_payload(action: Action) -> dict[str, Any]:
+    """Only execution metadata and digests belong in an approval record."""
+    return {
+        "context_version": 2,
+        "context": action.approval_context(),
+        "action": action.as_dict(),
+        "action_id": action.action_id,
+        "session_id": action.session_id,
+    }
+
+
+def claim_grant(journal: Journal, action: Action) -> Approval | None:
+    """Verify, select and reserve an approval atomically, before any side effect."""
+    with journal.locked():
+        if not journal.verify().ok:
+            raise JournalIntegrityError("cannot use approvals from a damaged journal")
+        approval = find_grant(journal, action.fingerprint())
+        if approval is None:
+            return None
+        journal.append(
+            EventType.APPROVAL_CLAIMED,
+            Actor.SENTINEL,
+            {
+                **approval_payload(action),
+                "fingerprint": action.fingerprint(),
+                "approval_seq": approval.seq,
+            },
+        )
+        return approval

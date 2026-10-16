@@ -50,27 +50,28 @@ def _parameters(journal: Path, workspace: Path) -> StdioServerParameters:
 
 
 async def _interrogate(journal: Path, workspace: Path) -> dict[str, Any]:
-    async with (
-        stdio_client(_parameters(journal, workspace)) as (read, write),
-        ClientSession(read, write) as session,
-    ):
-        info = await session.initialize()
-        tools = await session.list_tools()
-        ran = await session.call_tool("run_shell", {"command": "echo interop"})
-        refused = await session.call_tool("run_shell", {"command": "rm -rf /"})
-        wrote = await session.call_tool(
-            "write_file", {"path": "from-the-client.md", "content": "hello"}
-        )
-        return {
-            "protocol": info.protocol_version,
-            "server": info.server_info.name,
-            "tools": sorted(tool.name for tool in tools.tools),
-            "ran_error": ran.is_error,
-            "ran_text": ran.content[0].text,
-            "refused_error": refused.is_error,
-            "refused_text": refused.content[0].text,
-            "wrote_error": wrote.is_error,
-        }
+    with anyio.fail_after(20):
+        async with (
+            stdio_client(_parameters(journal, workspace)) as (read, write),
+            ClientSession(read, write) as session,
+        ):
+            info = await session.initialize()
+            tools = await session.list_tools()
+            ran = await session.call_tool("run_shell", {"command": "echo interop"})
+            refused = await session.call_tool("run_shell", {"command": "rm -rf /"})
+            wrote = await session.call_tool(
+                "write_file", {"path": "from-the-client.md", "content": "hello"}
+            )
+            return {
+                "protocol": info.protocol_version,
+                "server": info.server_info.name,
+                "tools": sorted(tool.name for tool in tools.tools),
+                "ran_error": ran.is_error,
+                "ran_text": ran.content[0].text,
+                "refused_error": refused.is_error,
+                "refused_text": refused.content[0].text,
+                "wrote_error": wrote.is_error,
+            }
 
 
 def test_a_real_client_can_drive_the_server(tmp_path: Path) -> None:

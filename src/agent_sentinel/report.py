@@ -79,6 +79,23 @@ class SessionBlock:
 
 
 def sessions(events: Sequence[Event]) -> list[SessionBlock]:
+    """Prefer explicit session IDs; keep legacy records in their original order."""
+    if not any(event.payload.get("action_id") for event in events):
+        return _legacy_sessions(events)
+    grouped: dict[str, list[Event]] = {}
+    legacy: list[Event] = []
+    for event in events:
+        session_id = event.payload.get("session_id")
+        if isinstance(session_id, str) and session_id:
+            grouped.setdefault(session_id, []).append(event)
+        else:
+            legacy.append(event)
+    blocks = [SessionBlock(key, tuple(value)) for key, value in grouped.items()]
+    blocks.extend(_legacy_sessions(legacy))
+    return sorted(blocks, key=lambda block: block.events[0].seq)
+
+
+def _legacy_sessions(events: Sequence[Event]) -> list[SessionBlock]:
     """Group records into the sessions they belong to.
 
     Records before the first ``session.start`` — a bare ``journal note``, say —
@@ -224,7 +241,7 @@ def html_report(
         "<!doctype html>",
         '<html lang="en"><head><meta charset="utf-8">',
         "<title>agent-sentinel journal</title>",
-        f"<style>{_STYLESHEET}</style>",
+        f"<style>{_STYLESHEET}\n{_EVIDENCE_CSS}</style>",
         "</head><body>",
         "<h1>agent-sentinel journal</h1>",
         _html_summary(journal, report, len(scan.events)),
@@ -233,13 +250,14 @@ def html_report(
     for block in blocks:
         parts.append("<section>")
         parts.append(f"<h2>{escape(block.render_title())}</h2>")
+        parts.append(_action_timeline(block.events))
         parts.append(
-            "<table><thead><tr><th>seq</th><th>time</th><th>actor</th>"
+            '<div class="event-table"><table class="events"><thead><tr><th>seq</th><th>time</th><th>actor</th>'
             "<th>event</th><th>detail</th><th>hash</th></tr></thead><tbody>"
         )
         for event in block.events:
             parts.append(_html_row(event))
-        parts.append("</tbody></table>")
+        parts.append("</tbody></table></div>")
         parts.append("</section>")
 
     if report.issues:
@@ -283,7 +301,7 @@ def _html_row(event: Event) -> str:
         status = _text(event.payload.get("status"))
         css = f' class="{escape(status)}"'
     return (
-        "<tr>"
+        f'<tr id="event-{event.seq}">'
         f"<td>{event.seq}</td>"
         f"<td>{escape(event.ts)}</td>"
         f"<td>{escape(event.actor.value)}</td>"
@@ -411,6 +429,8 @@ def _describe(event: Event) -> str:
         return f"{_text(payload.get('effect'))} from {rule}"
     if event.type is EventType.APPROVAL_REQUESTED:
         return f"waiting for a human: {_text(payload.get('command'))}"
+    if event.type is EventType.APPROVAL_CLAIMED:
+        return f"reserved approval #{payload.get('approval_seq')} before execution"
     if event.type is EventType.APPROVAL_DECIDED:
         verdict = "granted" if payload.get("granted") else "refused"
         note = _text(payload.get("note"))
@@ -460,3 +480,73 @@ def _optional_text(value: Any) -> str | None:
 def dumps(payload: Any) -> str:
     """JSON with the same settings the journal uses, so output stays comparable."""
     return json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=False)
+
+
+_EVIDENCE_CSS = """
+body { max-width: 1120px; margin: 40px auto; padding: 0 24px; font: 15px/1.65 system-ui, sans-serif; color: #17283c; background: #f5f7fb; }
+h1 { font-size: 30px; letter-spacing: -.6px; } h2 { margin-top: 32px; }
+table { border-collapse: collapse; width: 100%; background: white; margin: 16px 0; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid #dce4ef; overflow-wrap: anywhere; }
+th { background: #eaf0f7; } code, pre { overflow-wrap: anywhere; white-space: pre-wrap; word-break: break-word; }
+details { border: 1px solid #d5dfeb; border-radius: 10px; background: white; margin: 14px 0; padding: 16px 20px; }
+summary { cursor: pointer; overflow-wrap: anywhere; } pre { background: #f0f4f8; padding: 14px; border-radius: 6px; }
+.metrics { display: flex; gap: 16px; flex-wrap: wrap; } .metrics article { flex: 1; min-width: 140px; padding: 20px; background: #163d64; color: white; border-radius: 10px; }
+.metrics strong { display: block; font-size: 30px; } .warning { color: #9a4200; border-left: 4px solid #d58b22; padding-left: 12px; }
+.event-table { overflow-x: auto; }
+.events th:nth-child(-n+4), .events td:nth-child(-n+4), .events td:last-child { white-space: nowrap; overflow-wrap: normal; }
+.events td:nth-child(5) { min-width: 180px; }
+.events code { white-space: nowrap; word-break: normal; overflow-wrap: normal; }
+a { color: #145b93; text-underline-offset: 3px; }
+.timeline { border-left: 3px solid #d5dfeb; padding-left: 24px; } .timeline li { margin: 12px 0; }
+@media print { body { background: white; margin: 0; } details { break-inside: avoid; } }
+"""
+
+
+def html_document(title: str, body: str) -> str:
+    """Wrap escaped report content in a portable document with no active content."""
+    return (
+        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"<title>{escape(title)}</title><style>{_EVIDENCE_CSS}</style></head>"
+        f"<body><h1>{escape(title)}</h1>{body}</body></html>"
+    )
+
+
+def _action_timeline(events: Sequence[Event]) -> str:
+    grouped: dict[str, list[Event]] = {}
+    legacy = False
+    for event in events:
+        action_id = event.payload.get("action_id")
+        if isinstance(action_id, str) and action_id:
+            grouped.setdefault(action_id, []).append(event)
+        elif event.type not in {EventType.SESSION_START, EventType.SESSION_END, EventType.NOTE}:
+            legacy = True
+    parts: list[str] = []
+    if legacy:
+        parts.append(
+            '<p class="warning">Legacy events / 旧事件: 按原始顺序展示, 缺少精确动作关联; 旧审批不可用于新执行。</p>'
+        )
+    for action_id, history in grouped.items():
+        proposed = _first(history, EventType.ACTION_PROPOSED)
+        target = _text(proposed.payload.get("target")) if proposed else "approval evidence"
+        claimed = _first(history, EventType.APPROVAL_CLAIMED)
+        outcome = _first(history, EventType.ACTION_RESULT)
+        status = _text(outcome.payload.get("status")) if outcome else "no result / 无结果"
+        if claimed is not None and outcome is None:
+            status = "结果未知 / outcome unknown — approval remains consumed"
+        parts.append(f"<details><summary>{escape(target)} · <b>{escape(status)}</b></summary>")
+        parts.append(f'<p>Action ID: <code>{escape(action_id)}</code></p><ol class="timeline">')
+        for event in history:
+            parts.append(
+                f'<li><a href="#event-{event.seq}">#{event.seq}</a> {escape(event.ts)} · {escape(event.type.value)}'
+            )
+            approval_seq = event.payload.get("approval_seq")
+            if isinstance(approval_seq, int):
+                parts.append(f' · <a href="#event-{approval_seq}">approval #{approval_seq}</a>')
+            parts.append(
+                "<pre>"
+                + escape(json.dumps(dict(event.payload), ensure_ascii=False, indent=2))
+                + "</pre></li>"
+            )
+        parts.append("</ol></details>")
+    return "\n".join(parts)

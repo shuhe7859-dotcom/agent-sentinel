@@ -123,3 +123,13 @@ The design preference is to fail loudly and conservatively:
 
 See [`SECURITY.md`](../SECURITY.md). Please do not open a public issue for a
 bypass.
+
+
+## Context-bound approval extension
+
+Approvals now bind effective policy and execution inputs, with a durable atomic claim
+under a cooperating-writer lock. Changing directory, file contents or request parameters
+requires a new grant. Crash-after-claim never automatically releases approval. This is
+at-most-once grant consumption, not exactly-once external execution or authenticated
+human identity. File state is rechecked, but OS-level TOCTOU and unrestricted subprocess
+behavior remain outside the boundary. See [approvals](approvals.md).

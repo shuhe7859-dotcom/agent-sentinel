@@ -53,6 +53,9 @@ class EventType(StrEnum):
     APPROVAL_REQUESTED = "approval.requested"
     """A ``review`` verdict was escalated to a human."""
 
+    APPROVAL_CLAIMED = "approval.claimed"
+    """An approval was reserved before execution; never automatically reusable."""
+
     APPROVAL_DECIDED = "approval.decided"
     """Someone -- or something -- answered an escalation."""
 

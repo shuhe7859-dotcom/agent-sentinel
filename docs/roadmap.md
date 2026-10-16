@@ -1,7 +1,7 @@
 # Roadmap
 
 Milestones are ordered by "what makes the tool honest", not by what is most fun
-to build. Everything below M1 is a plan, not a promise.
+to build. Completed milestones are checked below; the backlog remains exploratory.
 
 ## M0 — Foundation ✅
 
@@ -86,6 +86,15 @@ guardrail is not a thing it has to go through but the only thing it has.
       as a **test** client proving a real implementation can drive it
 - [x] Tool schemas in the OpenAI function-calling shape, which is what most
       frameworks accept, so the adapter is a format rather than a dependency
+
+## M5 — Contextual approval and evidence experiments ✅
+
+- [x] Versioned execution context bound to policy, cwd, content and request digests
+- [x] Atomic cross-process journal append and durable single-use approval claims
+- [x] Explicit action/session correlation and unknown crash outcomes
+- [x] Read-only `policy compare`, verified inputs, text/JSON/offline HTML output
+- [x] Labelled teaching cases, documented metric denominators, reproducible offline demo
+- [x] Old log reading/verification, with legacy approvals requiring a fresh request
 
 ## Backlog / ideas
 

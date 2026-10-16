@@ -100,3 +100,73 @@ signature that does not verify — are **not** dressed up as findings about your
 code. They go into `invocations[].toolExecutionNotifications`, which is what
 SARIF has for "the tool could not do its job", and
 `invocations[].executionSuccessful` is false.
+
+
+## Contextual evidence timeline
+
+HTML exports now group new actions by `action_id` and sessions by `session_id`,
+including interleaved sessions. Expand a native `<details>` panel to see the proposed
+inputs, policy, exact approval scope, durable claim and execution result. A claimed
+action without a result is labelled **outcome unknown**; its approval remains spent.
+Old events retain their sequential presentation and explicitly lack precise action
+correlation. The report is a single file with no scripts, fonts, CDN or external assets.
+All log-provided strings are escaped, including targets, policy reasons and contexts.
+
+`journal export` remains diagnostic: it renders readable evidence even from damaged
+logs and highlights BROKEN. Policy comparison below is stricter and rejects damaged
+inputs rather than calculating apparently trustworthy statistics.
+
+## Counterfactual policy comparison
+
+```console
+sentinel policy compare --journal .sentinel/session.jsonl --old standard --new strict --format text
+sentinel policy compare --journal .sentinel/session.jsonl --old standard --new strict --format html --out comparison.html
+sentinel policy compare --journal .sentinel/session.jsonl --old old.toml --new new.toml --format json --anchors anchors.jsonl
+```
+
+`--old` and `--new` accept preset names or TOML files. `--format` defaults to `text`;
+`--out` is optional. `--key` pins an anchor signer and requires `--anchors`.
+The output cannot overwrite one of the command's input paths.
+
+Comparison takes one scanned snapshot, verifies it (and optional anchors), restores
+**every** action proposal and evaluates both supplied policies. It never executes
+commands, writes target files, fetches URLs or consumes approvals. It does not replay
+runtime structural checks, machine state or human decisions. The supplied old policy
+is a comparison baseline, not a claim that it was the historical effective policy.
+
+Outputs include policy names/fingerprints, every decision with rule and reason,
+a 3-by-3 allow/review/deny transition matrix, changed-decision count, changed-rule
+count, review-action counts and rule hits. Every proposal is a sample; retries are
+not deduplicated. Review counts are potential review workload, not actual human prompts.
+JSON carries its own `schema: 1`, separate from journal and approval versions.
+
+Success (including policy differences and zero proposals) exits 0. Missing files,
+invalid policies, broken chains/anchors, or unrestorable action records exit 1; no
+records are silently skipped. An existing empty journal produces zero counts.
+
+## Reproducible offline experiments
+
+```console
+python examples/evidence_demo.py
+```
+
+This creates a fresh `.sentinel/evidence-*` directory on every run and prints the
+path to `index.html`. It only writes demo files; no historical shell commands or
+network calls are executed. The three scenes show changed-content approval rejection,
+standard-versus-strict comparison, and a tampered copy. The original log and its
+checkpoint remain intact. An additional simulated crash demonstrates an unknown result.
+
+`examples/cases/evaluation.toml` contains 14 manually labelled teaching cases, including
+normal actions and command variants. The demo writes `evaluation.html`, `.json` and
+`.txt`. `compare_cases(cases, old, new)` is the library evaluation API.
+
+| Metric | Numerator | Denominator |
+| --- | --- | --- |
+| unsafe_allow_rate | Expected review/deny but predicted allow | All expected review/deny cases |
+| unnecessary_restriction_rate | Expected allow but predicted review/deny | All expected allow cases |
+| review_rate | Predicted review | All cases |
+
+JSON reports each numerator, denominator and fractional rate. Zero denominators
+produce null, rendered as N/A / 不适用. The sample illustrates a tradeoff; it is not
+representative evidence of general security effectiveness. Unlabelled real journals
+have no accuracy metrics. Add held-out labelled cases before drawing broader conclusions.

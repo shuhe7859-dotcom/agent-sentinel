@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 While the major version is `0`, changes to the record format or to a rule `id`
 are still treated as breaking, because journals outlive code.
 
+## Unreleased — Context-bound evidence
+
+- Approval context v2 binds execution inputs and policy identity; old unbound grants no longer execute.
+- Cross-process journal locks and durable `approval.claimed` records prevent grant reuse after crashes.
+- New `policy compare` command emits verified, read-only text/JSON/HTML counterfactual reports.
+- Action/session timelines, labelled teaching metrics and the offline evidence demo.
+- Breaking: `approve --command` now errors; use the contextual `--request-seq` workflow.
+- Old readers must upgrade to understand `approval.claimed`; old journals remain verifiable.
+
 ## [Unreleased]
 
 ### Added

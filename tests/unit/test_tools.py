@@ -12,7 +12,6 @@ from agent_sentinel.errors import ToolError
 from agent_sentinel.journal import Journal
 from agent_sentinel.policy.engine import PolicyEngine
 from agent_sentinel.policy.loader import parse_policy
-from agent_sentinel.policy.models import Action, ActionKind
 from agent_sentinel.policy.presets import load_preset
 from agent_sentinel.tools import (
     SentinelTools,
@@ -143,7 +142,7 @@ def test_a_reviewed_call_asks_for_a_human_and_then_works(tmp_path: Path) -> None
 
     record_decision(
         journal,
-        action=Action(kind=ActionKind.SHELL, target="echo .netrc"),
+        action=first.result.decision.action,
         granted=True,
         source=SOURCE_OPERATOR,
     )

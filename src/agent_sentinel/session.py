@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Mapping
+from contextvars import Token
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -73,6 +74,7 @@ class Session:
         self._start: Event | None = None
         self._end: Event | None = None
         self._actions = 0
+        self._token: Token[str | None] | None = None
 
     @property
     def info(self) -> SessionInfo | None:
@@ -109,12 +111,15 @@ class Session:
                 "metadata": self.metadata,
             },
         )
+        self._token = self.journal.session.set(self.session_id)
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> Literal[False]:
         start = self._start
         if start is None:
             return False
+        if self._token is not None:
+            self.journal.session.reset(self._token)
         actions, head_hash = self._summarise(start.seq)
         self._actions = actions
         self._end = self.journal.append(
@@ -137,6 +142,9 @@ class Session:
             if event.seq <= start_seq:
                 continue
             head_hash = event.hash
-            if event.type is EventType.ACTION_PROPOSED:
+            if (
+                event.type is EventType.ACTION_PROPOSED
+                and event.payload.get("session_id") == self.session_id
+            ):
                 actions += 1
         return actions, head_hash

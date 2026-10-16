@@ -8,7 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
 [![Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/tests-344%20passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-370%20passing-brightgreen.svg)](tests/)
 
 编码智能体会改动你的文件、执行你的命令、访问外部网络。由此引出两个问题，它们构成了
 这个项目的全部：
@@ -38,7 +38,7 @@ status:  awaiting_approval
 ## 当前状态
 
 早期但可用。记录格式、策略引擎、三个受控执行面、审批闭环、防篡改工具、日志报告以及
-面向智能体的工具都已实现，并有 344 个测试覆盖。
+面向智能体的工具都已实现，本次 Windows 验证为 370 项通过、4 项因平台条件跳过。
 
 | 模块 | 状态 |
 | --- | --- |
@@ -62,6 +62,22 @@ status:  awaiting_approval
 | `sentinel` 命令行与稳定退出码 | 已实现 |
 
 里程碑清单见 [`docs/roadmap.md`](docs/roadmap.md)。
+
+## 新增：上下文审批与策略实验
+
+审批现在绑定实际执行上下文：工作目录、文件修改前后摘要、完整网络请求参数及策略指纹。
+执行前原子占用审批；崩溃后保留占用，报告显示“结果未知”。旧日志仍可查看和校验，
+旧审批必须重新申请；`approve --command` 已停止授权，请使用 `--request-seq`。
+
+```console
+python examples/evidence_demo.py
+sentinel policy compare --journal .sentinel/session.jsonl --old standard --new strict --format html --out comparison.html
+```
+
+演示会打印离线 `index.html` 的位置，包含审批内容变化、策略对比、14 条标注样本评测和
+日志篡改检测。比较只重新判定，不执行历史动作。HTML 无脚本和外部资源，适合直接用于答辩。
+真实日志没有人工标签时只报告判定差异，不宣称准确率。详见
+[审批协议](docs/approvals.md)、[报告与实验](docs/reporting.md)。
 
 ## 两分钟上手
 

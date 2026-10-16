@@ -13,7 +13,6 @@ from agent_sentinel.guards.filesystem import OUTSIDE, GuardedFileSystem, normali
 from agent_sentinel.journal import Journal
 from agent_sentinel.policy.engine import PolicyEngine
 from agent_sentinel.policy.loader import parse_policy
-from agent_sentinel.policy.models import Action, ActionKind
 from agent_sentinel.policy.presets import load_preset
 
 
@@ -172,14 +171,16 @@ def test_a_secret_file_is_reviewed_and_then_needs_approving_again(tmp_path: Path
 
     record_decision(
         journal,
-        action=Action(kind=ActionKind.FILE_WRITE, target=".env"),
+        action=first.decision.action,
         granted=True,
         source=SOURCE_OPERATOR,
     )
 
-    second = guard.write(".env", "TOKEN=2")
+    changed = guard.write(".env", "TOKEN=2")
+    assert changed.awaiting_approval
+    second = guard.write(".env", "TOKEN=1")
     assert second.ok
-    assert (tmp_path / ".env").read_text(encoding="utf-8") == "TOKEN=2"
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == "TOKEN=1"
 
     third = guard.write(".env", "TOKEN=3")
     assert third.awaiting_approval

@@ -43,11 +43,11 @@ def _escalate(journal: Journal, command: str = "echo hello") -> Action:
 
 
 # ------------------------------------------------------------------ fingerprints
-def test_action_fingerprint_ignores_the_working_directory() -> None:
+def test_action_fingerprint_binds_the_working_directory() -> None:
     here = Action(kind=ActionKind.SHELL, target="echo hi", cwd="/one")
     there = Action(kind=ActionKind.SHELL, target="echo hi", cwd="/two")
 
-    assert here.fingerprint() == there.fingerprint()
+    assert here.fingerprint() != there.fingerprint()
 
 
 def test_action_fingerprint_separates_kinds_and_commands() -> None:

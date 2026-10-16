@@ -185,3 +185,17 @@ $ jq -r 'select(.type=="policy.decision") | "\(.seq)\t\(.payload.effect)\t\(.pay
 1       allow   (policy default)
 2       deny    shell.rm-root
 ```
+
+
+## Contextual approvals and correlation (current extension)
+
+The outer envelope stays `1.0`. New action-related payloads carry `action_id` and
+`session_id` (null outside a Session). Approval requests/decisions include
+`context_version: 2`, `context`, `action` (the reconstructible snapshot), and its
+`fingerprint`. Context excludes correlation IDs and includes the effective policy
+fingerprint in metadata. See [approvals](approvals.md) for per-surface binding.
+
+`approval.claimed` is a new event type containing the same context and `approval_seq`.
+It reserves a grant durably before execution. A missing corresponding action result
+is unknown, never evidence of non-execution. Readers predating this type must upgrade;
+new readers still verify old logs, but old unbound approvals are not executable grants.

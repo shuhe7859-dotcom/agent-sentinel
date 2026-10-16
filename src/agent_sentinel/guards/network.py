@@ -31,6 +31,7 @@ from typing import Any
 from urllib.parse import SplitResult, urlsplit
 
 from ..approvals import ApprovalRequest
+from ..events import content_digest
 from ..journal import Journal
 from ..policy.engine import PolicyEngine
 from ..policy.models import Action, ActionKind, Decision, Effect
@@ -194,6 +195,8 @@ class GuardedNetwork(Guard[NetworkResult]):
         max_bytes: int | None = None,
     ) -> NetworkResult:
         """Ask the policy about ``url`` and, if it agrees, fetch it."""
+        headers = dict(headers or {})
+        body = bytes(body) if body is not None else None
         parts = urlsplit(url)
         scheme = parts.scheme.lower()
         host = _host_of_parts(parts, scheme)
@@ -201,6 +204,10 @@ class GuardedNetwork(Guard[NetworkResult]):
             "url": url,
             "scheme": scheme,
             "method": method.upper(),
+            "headers_sha256": content_digest(headers),
+            "body_sha256": hashlib.sha256(body).hexdigest() if body is not None else None,
+            "timeout_s": self.timeout if timeout is None else timeout,
+            "max_bytes": self.max_bytes if max_bytes is None else max_bytes,
         }
         problem = _unsupported_reason(parts, scheme)
         if problem is not None:

@@ -344,16 +344,16 @@ def test_approving_lets_the_command_run_exactly_once(
     assert _run_reviewed(journal_path) == cli.EXIT_REVIEW
 
 
-def test_a_grant_can_be_made_directly_by_command(
+def test_command_only_preapproval_is_rejected(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     journal_path = tmp_path / "session.jsonl"
 
     code = cli.main(["approve", str(journal_path), "--command", "echo .netrc", "--note", "manual"])
-    assert code == cli.EXIT_OK
-    assert "fingerprint:" in capsys.readouterr().out
+    assert code == cli.EXIT_ERROR
+    assert "--request-seq" in capsys.readouterr().err
 
-    assert _run_reviewed(journal_path) == cli.EXIT_OK
+    assert _run_reviewed(journal_path) == cli.EXIT_REVIEW
 
 
 def test_a_grant_can_expire_before_it_is_used(
@@ -361,7 +361,11 @@ def test_a_grant_can_expire_before_it_is_used(
 ) -> None:
     journal_path = tmp_path / "session.jsonl"
 
-    cli.main(["approve", str(journal_path), "--command", "echo .netrc", "--expires-in", "0"])
+    _run_reviewed(journal_path)
+    request = next(
+        e for e in Journal(journal_path).read() if e.type is EventType.APPROVAL_REQUESTED
+    )
+    cli.main(["approve", str(journal_path), "--request-seq", str(request.seq), "--expires-in", "0"])
     capsys.readouterr()
 
     assert _run_reviewed(journal_path) == cli.EXIT_REVIEW
@@ -370,7 +374,11 @@ def test_a_grant_can_expire_before_it_is_used(
 def test_a_refusal_is_recorded_but_does_not_block(tmp_path: Path) -> None:
     journal_path = tmp_path / "session.jsonl"
 
-    cli.main(["approve", str(journal_path), "--command", "echo .netrc", "--refuse"])
+    _run_reviewed(journal_path)
+    request = next(
+        e for e in Journal(journal_path).read() if e.type is EventType.APPROVAL_REQUESTED
+    )
+    cli.main(["approve", str(journal_path), "--request-seq", str(request.seq), "--refuse"])
     decisions = [
         event.payload
         for event in Journal(journal_path).read()

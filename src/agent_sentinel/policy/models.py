@@ -91,6 +91,8 @@ class Action:
 
     cwd: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    action_id: str | None = None
+    session_id: str | None = None
 
     @property
     def subject(self) -> str:
@@ -100,6 +102,10 @@ class Action:
 
     def as_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {"kind": self.kind.value, "target": self.target}
+        if self.action_id:
+            data["action_id"] = self.action_id
+        if self.session_id:
+            data["session_id"] = self.session_id
         if self.argv:
             data["argv"] = list(self.argv)
         if self.cwd:
@@ -108,14 +114,47 @@ class Action:
             data["metadata"] = dict(self.metadata)
         return data
 
-    def fingerprint(self) -> str:
-        """A digest of *what* this action is, ignoring where it runs.
+    def approval_context(self) -> dict[str, Any]:
+        """Versioned execution identity, independent of policy matching and event IDs."""
+        return {
+            "version": 2,
+            "kind": self.kind.value,
+            "target": self.target,
+            "argv": list(self.argv),
+            "cwd": self.cwd,
+            "metadata": dict(self.metadata),
+        }
 
-        Approvals are keyed on this value. Two commands that differ at all --
-        including by kind -- never share a fingerprint, which is what stops an
-        approval for one action from authorising a different one.
-        """
-        return content_digest({"kind": self.kind.value, "subject": self.subject})
+    def fingerprint(self) -> str:
+        """Bind approval to exact execution inputs; event IDs are deliberately excluded."""
+        return content_digest(self.approval_context())
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Action:
+        """Restore an action without silently repairing malformed journal data."""
+        kind = data.get("kind")
+        target = data.get("target")
+        argv = data.get("argv", [])
+        metadata = data.get("metadata", {})
+        cwd = data.get("cwd")
+        if not isinstance(kind, str) or not isinstance(target, str):
+            raise ValueError("action requires string kind and target")
+        if not isinstance(argv, list) or not all(isinstance(v, str) for v in argv):
+            raise ValueError("action argv must be a list of strings")
+        if not isinstance(metadata, dict) or (cwd is not None and not isinstance(cwd, str)):
+            raise ValueError("invalid action metadata or cwd")
+        for key in ("action_id", "session_id"):
+            if data.get(key) is not None and not isinstance(data[key], str):
+                raise ValueError(f"invalid {key}")
+        return cls(
+            kind=ActionKind(kind),
+            target=target,
+            argv=tuple(argv),
+            cwd=cwd,
+            metadata=metadata,
+            action_id=data.get("action_id"),
+            session_id=data.get("session_id"),
+        )
 
 
 @dataclass(frozen=True)
